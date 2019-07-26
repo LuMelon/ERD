@@ -13,7 +13,7 @@ data = {}
 data_ID = []
 data_len = []
 data_y = []
-word2vec = gensim.models.KeyedVectors.load('word2vec.model')
+word2vec = gensim.models.KeyedVectors.load_word2vec_format('/Users/lumenglong/word2vec.model')
 reward_counter = 0
 eval_flag = 0
 
@@ -48,11 +48,12 @@ def str2timestamp(str_time):
 
 def data_process(file_path):
     ret = {}
-    ss = file_path.split("\\")
+    ss = file_path.split("/")
     data = json.load(open(file_path, mode="r", encoding="utf-8"))
 
     # 'Wed Jan 07 11:14:08 +0000 2015'
-    ret[ss[4]] = {'label': ss[3], 'text': [data['text'].lower()], 'created_at': [str2timestamp(data['created_at'])]}
+    print("SS:", ss)
+    ret[ss[6]] = {'label': ss[5], 'text': [data['text'].lower()], 'created_at': [str2timestamp(data['created_at'])]}
 
     return ret
 
@@ -64,12 +65,12 @@ def load_data(data_path):
     files = []
     data_ID = []
     data_len = []
-    list_files(data_path)
+    list_files(data_path) #load all filepath to files
 
     # load data to json
     for file in files:
-        td = data_process(file)
-        for key in td.keys():
+        td = data_process(file) # read out the information from json file, and organized it as {dataID:{'key':val}}
+        for key in td.keys(): # use temporary data to organize the final whole data
             if key in data:
                 data[key]['text'].append(td[key]['text'][0])
                 data[key]['created_at'].append(td[key]['created_at'][0])
@@ -89,8 +90,8 @@ def load_data(data_path):
         for i in range(len(temp_list)):
             if temp_list[i][0] - temp_list[0][0] > FLAGS.time_limit * 3600 or len(data[key]['created_at']) >= 100:
                 break
-            if i % FLAGS.post_fn == 0:
-                if len(ttext) > 0:
+            if i % FLAGS.post_fn == 0: # merge the fixed number of texts in a time interval
+                if len(ttext) > 0: # if there are data already in ttext, output it as a new instance
                     data[key]['text'].append(ttext)
                     data[key]['created_at'].append(temp_list[i][0])
                 else:
@@ -106,9 +107,9 @@ def load_data(data_path):
 
     for key in data.keys():
         data_ID.append(key)
-    data_ID = random.sample(data_ID, len(data_ID))
+    data_ID = random.sample(data_ID, len(data_ID)) #shuffle the data id
 
-    for i in range(len(data_ID)):
+    for i in range(len(data_ID)): #pre processing the extra informations
         data_len.append(len(data[data_ID[i]]['text']))
         if data[data_ID[i]]['label'] == "rumours":
             data_y.append([1.0, 0.0])
@@ -124,7 +125,7 @@ def get_df_batch(start, new_data_len=[]):
     data_x = np.zeros([FLAGS.batch_size, FLAGS.max_seq_len, FLAGS.max_sent_len, FLAGS.embedding_dim], dtype=np.float32)
     m_data_y = np.zeros([FLAGS.batch_size, 2], dtype=np.int32)
     m_data_len = np.zeros([FLAGS.batch_size], dtype=np.int32)
-
+    miss_vec = 0
     if len(new_data_len) > 0:
         t_data_len = new_data_len
     else:
@@ -144,10 +145,10 @@ def get_df_batch(start, new_data_len=[]):
                 try:
                     data_x[i][j][k] = word2vec[m_word]
                 except:
-                    miss_vec = 1
-
+                    miss_vec += 1
+    print("miss_vec:", miss_vec)
         mts += 1
-        if mts >= len(data_ID):
+        if mts >= len(data_ID): # read data looply
             mts = mts % len(data_ID)
 
     return data_x, m_data_len, m_data_y
@@ -158,6 +159,7 @@ def get_df_batch(start, new_data_len=[]):
 def get_rl_batch(ids, seq_states, stop_states, counter_id, start_id, total_data):
     input_x = np.zeros([FLAGS.batch_size, FLAGS.max_sent_len, FLAGS.embedding_dim], dtype=np.float32)
     input_y = np.zeros([FLAGS.batch_size, FLAGS.class_num], dtype=np.float32)
+    miss_vec = 0
 
     for i in range(FLAGS.batch_size):
         if stop_states[i] == 1 or seq_states[i] >= data_len[ids[i]]:
@@ -186,7 +188,7 @@ def get_rl_batch(ids, seq_states, stop_states, counter_id, start_id, total_data)
                 try:
                     input_x[i][j] = word2vec[m_word]
                 except:
-                    miss_vec = 1
+                    miss_vec += 1
             input_y[i] = data_y[ids[i]]
         # point to the next sequence
         seq_states[i] += 1
