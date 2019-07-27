@@ -20,7 +20,7 @@ class RL_GRU2:
         # shared pooling layer
         self.w_t = tf.Variable(tf.random_uniform([input_dim, output_dim], -1.0, 1.0), name="w_t")
         self.b_t = tf.Variable(tf.constant(0.01, shape=[output_dim]), name="b_t")
-        pooled_input_x = self.shared_pooling_layer(self.input_x, input_dim, max_seq_len, max_word_len, output_dim)
+        pooled_input_x = self.shared_pooling_layer(self.input_x, input_dim, max_seq_len, max_word_len, output_dim) # replace the shared_pooling_layer with a sentiment analysis model
         pooled_rl_input = self.shared_pooling_layer(self.rl_input, input_dim, 1, max_word_len, output_dim)
         pooled_rl_input = tf.reshape(pooled_rl_input, [-1, output_dim])
 
@@ -32,15 +32,15 @@ class RL_GRU2:
         df_cell = rnn.DropoutWrapper(df_cell, output_keep_prob=self.dropout_keep_prob)
 
         w_tp = tf.constant(0.0, shape=[hidden_dim, output_dim], name="w_tp")
-        self.df_state = tf.matmul(self.init_states, w_tp, name="df_state")
+        self.df_state = tf.matmul(self.init_states, w_tp, name="df_state") # w_tp is not an Variable?
 
         df_outputs, df_last_state = tf.nn.dynamic_rnn(df_cell, pooled_input_x_dp, self.x_len, initial_state=self.df_state, dtype=tf.float32)
         l2_loss = tf.constant(0.0)
 
-        w_ps = tf.Variable(tf.truncated_normal([output_dim, class_num], stddev=0.1))
-        b_ps = tf.Variable(tf.constant(0.01, shape=[class_num]))
-        l2_loss += tf.nn.l2_loss(w_ps)
-        l2_loss += tf.nn.l2_loss(b_ps)
+        w_ps = tf.Variable(tf.truncated_normal([output_dim, class_num], stddev=0.1)) #
+        b_ps = tf.Variable(tf.constant(0.01, shape=[class_num])) #
+        l2_loss += tf.nn.l2_loss(w_ps) 
+        l2_loss += tf.nn.l2_loss(b_ps) 
 
         self.pre_scores = tf.nn.xw_plus_b(df_last_state, w_ps, b_ps, name="p_scores")
         self.predictions = tf.argmax(self.pre_scores, 1, name="predictions")
@@ -60,7 +60,7 @@ class RL_GRU2:
 
         w_ss1 = tf.Variable(tf.truncated_normal([output_dim, 64], stddev=0.01))
         b_ss1 = tf.Variable(tf.constant(0.01, shape=[64]))
-        rl_h1 = tf.nn.relu(tf.nn.xw_plus_b(self.rl_state, w_ss1, b_ss1))
+        rl_h1 = tf.nn.relu(tf.nn.xw_plus_b(self.rl_state, w_ss1, b_ss1))  # replace the process here
 
         w_ss2 = tf.Variable(tf.truncated_normal([64, action_num], stddev=0.01))
         b_ss2 = tf.Variable(tf.constant(0.01, shape=[action_num]))
@@ -96,7 +96,7 @@ class RL_GRU2:
         hs = tf.reshape(h, [-1, max_word_len, output_dim])
 
         inputs_expended = tf.expand_dims(hs, -1)
-
+        # [seq, words, out] --> [seq, words, out, 1] --> [seq, 1, out, 1] --> [1, seq, out]
         pooled = tf.nn.max_pool(
             inputs_expended,
             ksize=[1, max_word_len, 1, 1],
@@ -104,5 +104,5 @@ class RL_GRU2:
             padding="VALID",
             name="max_pool"
         )
-        cnn_outs = tf.reshape(pooled, [-1, max_seq_len, output_dim])
+        cnn_outs = tf.reshape(pooled, [-1, max_seq_len, output_dim]) 
         return cnn_outs

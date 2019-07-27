@@ -7,6 +7,8 @@ import gensim
 from config import *
 import random
 import math
+import chars2vec
+import re
 
 files = []
 data = {}
@@ -14,6 +16,7 @@ data_ID = []
 data_len = []
 data_y = []
 word2vec = gensim.models.KeyedVectors.load_word2vec_format('/Users/lumenglong/word2vec.model')
+c2vec = chars2vec.load_model('eng_300')
 reward_counter = 0
 eval_flag = 0
 
@@ -52,7 +55,7 @@ def data_process(file_path):
     data = json.load(open(file_path, mode="r", encoding="utf-8"))
 
     # 'Wed Jan 07 11:14:08 +0000 2015'
-    print("SS:", ss)
+    # print("SS:", ss)
     ret[ss[6]] = {'label': ss[5], 'text': [data['text'].lower()], 'created_at': [str2timestamp(data['created_at'])]}
 
     return ret
@@ -126,6 +129,10 @@ def get_df_batch(start, new_data_len=[]):
     m_data_y = np.zeros([FLAGS.batch_size, 2], dtype=np.int32)
     m_data_len = np.zeros([FLAGS.batch_size], dtype=np.int32)
     miss_vec = 0
+    hit_vec = 0
+
+    pattern = "[^A-Za-z]$"
+
     if len(new_data_len) > 0:
         t_data_len = new_data_len
     else:
@@ -143,14 +150,31 @@ def get_df_batch(start, new_data_len=[]):
             for k in range(len(t_words)):
                 m_word = t_words[k]
                 try:
-                    data_x[i][j][k] = word2vec[m_word]
-                except:
+                    # data_x[i][j][k] = c2vec.vectorize_words([m_word])[0]
+                    if not m_word:
+                        pass
+                    elif m_word[0]=='#':
+                        data_x[i][j][k] = word2vec['topic']
+                    elif m_word[0] == '@':
+                        data_x[i][j][k] = word2vec['person'] 
+                    elif re.match(r'(.*)http?://(.*)', m_word, re.M|re.I):
+                        data_x[i][j][k] = word2vec['link']                           
+                    else:
+                        data_x[i][j][k] = word2vec[re.sub(pattern, "", m_word)]
+                except KeyError:
+                    print("word:", m_word)
                     miss_vec += 1
-    print("miss_vec:", miss_vec)
+                except IndexError:
+                    print("i, j, k:", FLAGS.batch_size, '|',t_data_len[mts] ,'|', len(t_words))
+                    print("word:", m_word)
+                    raise
+                else:
+                    hit_vec += 1
         mts += 1
         if mts >= len(data_ID): # read data looply
             mts = mts % len(data_ID)
 
+    print("hit_vec | miss_vec:", hit_vec, '|', miss_vec)
     return data_x, m_data_len, m_data_y
 
 
