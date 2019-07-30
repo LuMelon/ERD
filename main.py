@@ -48,7 +48,7 @@ def rl_train(sess, mm, t_rw, t_steps):
     ssq = []
     print("in RL the begining")
     # get_new_len(sess, mm)
-    if len(data_ID) % FLAGS.batch_size == 0:
+    if len(data_ID) % FLAGS.batch_size == 0: # the total number of events
         flags = len(data_ID) / FLAGS.batch_size
     else:
         flags = len(data_ID) / FLAGS.batch_size + 1
@@ -62,7 +62,7 @@ def rl_train(sess, mm, t_rw, t_steps):
             ssq = t_ssq
     print(get_curtime() + " Now Start RL training ...")
     counter = 0
-    sum_rw = 0.0
+    sum_rw = 0.0 # sum of rewards
     while True:
         if counter > FLAGS.OBSERVE:
             sum_rw += np.mean(rw)

@@ -20,6 +20,7 @@ class RL_GRU2:
         # shared pooling layer
         self.w_t = tf.Variable(tf.random_uniform([input_dim, output_dim], -1.0, 1.0), name="w_t")
         self.b_t = tf.Variable(tf.constant(0.01, shape=[output_dim]), name="b_t")
+        #[batchsize, max_seq_len, max_word_len, input_dim] --> [batchsize, max_seq_len, output_dim]
         pooled_input_x = self.shared_pooling_layer(self.input_x, input_dim, max_seq_len, max_word_len, output_dim) # replace the shared_pooling_layer with a sentiment analysis model
         pooled_rl_input = self.shared_pooling_layer(self.rl_input, input_dim, 1, max_word_len, output_dim)
         pooled_rl_input = tf.reshape(pooled_rl_input, [-1, output_dim])
@@ -35,6 +36,7 @@ class RL_GRU2:
         self.df_state = tf.matmul(self.init_states, w_tp, name="df_state") # w_tp is not an Variable?
 
         df_outputs, df_last_state = tf.nn.dynamic_rnn(df_cell, pooled_input_x_dp, self.x_len, initial_state=self.df_state, dtype=tf.float32)
+
         l2_loss = tf.constant(0.0)
 
         w_ps = tf.Variable(tf.truncated_normal([output_dim, class_num], stddev=0.1)) #
@@ -45,9 +47,9 @@ class RL_GRU2:
         self.pre_scores = tf.nn.xw_plus_b(df_last_state, w_ps, b_ps, name="p_scores")
         self.predictions = tf.argmax(self.pre_scores, 1, name="predictions")
 
-        r_outputs = tf.reshape(df_outputs, [-1, output_dim])
-        scores_seq = tf.nn.softmax(tf.nn.xw_plus_b(r_outputs, w_ps, b_ps))
-        self.out_seq = tf.reshape(scores_seq, [-1, max_seq_len, class_num], name="out_seq")
+        r_outputs = tf.reshape(df_outputs, [-1, output_dim]) #[batchsize*max_seq_len, output_dim]
+        scores_seq = tf.nn.softmax(tf.nn.xw_plus_b(r_outputs, w_ps, b_ps)) # [batchsize * max_seq_len, class_num] 
+        self.out_seq = tf.reshape(scores_seq, [-1, max_seq_len, class_num], name="out_seq") #[batchsize, max_seq_len, class_num]
 
         df_losses = tf.nn.softmax_cross_entropy_with_logits_v2(logits=self.pre_scores, labels=self.input_y)
         self.loss = tf.reduce_mean(df_losses) + 0.1 * l2_loss

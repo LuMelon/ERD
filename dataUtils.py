@@ -9,6 +9,7 @@ import random
 import math
 import chars2vec
 import re
+import tensorflow as tf
 
 files = []
 data = {}
@@ -60,6 +61,26 @@ def data_process(file_path):
 
     return ret
 
+def transIrregularWord(word):
+    if not word:
+        return ''
+    pattern1 = "[^A-Za-z]*$" #punctuation at the end of sentence
+    pattern2 = "^[^A-Za-z@#]*" #punctuation at the start of sentence
+    word = re.sub(pattern2, "", re.sub(pattern1, "", word))
+    pattern3 = '(.*)http(.?)://(.*)' # url
+    pattern4 = '^[0-9]+.?[0-9]+$' # number
+    if not word:
+        return ''
+    elif word.__contains__('@'):
+        return 'person'
+    elif word.__contains__('#'):
+        return 'topic'
+    elif re.match(r'(.*)http?://(.*)', word, re.M|re.I|re.S):    
+        return 'links'
+    elif re.match(pattern4, word, re.M|re.I):
+        return 'number'
+    else:
+        return  word
 
 def load_data(data_path):
     # get data files path
@@ -70,6 +91,7 @@ def load_data(data_path):
     data_len = []
     list_files(data_path) #load all filepath to files
 
+    max_sent = 0
     # load data to json
     for file in files:
         td = data_process(file) # read out the information from json file, and organized it as {dataID:{'key':val}}
@@ -95,7 +117,10 @@ def load_data(data_path):
                 break
             if i % FLAGS.post_fn == 0: # merge the fixed number of texts in a time interval
                 if len(ttext) > 0: # if there are data already in ttext, output it as a new instance
-                    data[key]['text'].append(ttext)
+                    words = list( filter(lambda s: len(s)>0, [transIrregularWord(word) for word in re.split('([,\n ]+)', ttext.strip() )]) )
+                    if len(words) > max_sent:
+                        max_sent = len(words)
+                    data[key]['text'].append(words)
                     data[key]['created_at'].append(temp_list[i][0])
                 else:
                     ttext = temp_list[i][1]
@@ -105,7 +130,10 @@ def load_data(data_path):
 
         # keep the last one
         if len(ttext) > 0:
-            data[key]['text'].append(ttext)
+            words = list( filter(lambda s: len(s)>0, [transIrregularWord(word) for word in re.split('([,\n ]+)', ttext.strip() )]) )
+            if len(words) > max_sent:
+                max_sent = len(words)
+            data[key]['text'].append(words)
             data[key]['created_at'].append(temp_list[last][0])
 
     for key in data.keys():
@@ -119,6 +147,10 @@ def load_data(data_path):
         else:
             data_y.append([0.0, 1.0])
 
+    print("max_sent:", max_sent, ",  max_seq_len:", max(data_len))
+    tf.flags.DEFINE_integer("max_seq_len", max(data_len), "Max length of sequence (default: 300)")
+    tf.flags.DEFINE_integer("max_sent_len", max_sent, "Max length of sentence (default: 300)")
+
     eval_flag = int(len(data_ID) / 4) * 3
 
     print("{} data loaded".format(len(data)))
@@ -130,8 +162,6 @@ def get_df_batch(start, new_data_len=[]):
     m_data_len = np.zeros([FLAGS.batch_size], dtype=np.int32)
     miss_vec = 0
     hit_vec = 0
-
-    pattern = "[^A-Za-z]$"
 
     if len(new_data_len) > 0:
         t_data_len = new_data_len
@@ -146,27 +176,18 @@ def get_df_batch(start, new_data_len=[]):
         m_data_y[i] = data_y[mts]
         m_data_len[i] = t_data_len[mts]
         for j in range(t_data_len[mts]):
-            t_words = data[data_ID[mts]]['text'][j].strip().split(" ")
+            t_words = data[data_ID[mts]]['text'][j]
             for k in range(len(t_words)):
                 m_word = t_words[k]
                 try:
                     # data_x[i][j][k] = c2vec.vectorize_words([m_word])[0]
-                    if not m_word:
-                        pass
-                    elif m_word[0]=='#':
-                        data_x[i][j][k] = word2vec['topic']
-                    elif m_word[0] == '@':
-                        data_x[i][j][k] = word2vec['person'] 
-                    elif re.match(r'(.*)http?://(.*)', m_word, re.M|re.I):
-                        data_x[i][j][k] = word2vec['link']                           
-                    else:
-                        data_x[i][j][k] = word2vec[re.sub(pattern, "", m_word)]
+                    data_x[i][j][k] = word2vec[m_word]
                 except KeyError:
                     print("word:", m_word)
                     miss_vec += 1
                 except IndexError:
                     print("i, j, k:", FLAGS.batch_size, '|',t_data_len[mts] ,'|', len(t_words))
-                    print("word:", m_word)
+                    print("word:", m_word, "(", i, j, k, ")")
                     raise
                 else:
                     hit_vec += 1
@@ -186,11 +207,13 @@ def get_rl_batch(ids, seq_states, stop_states, counter_id, start_id, total_data)
     miss_vec = 0
 
     for i in range(FLAGS.batch_size):
-        if stop_states[i] == 1 or seq_states[i] >= data_len[ids[i]]:
+        # seq_states:records the id of a sentence in a sequence
+        # stop_states: records whether the sentence is judged by the program
+        if stop_states[i] == 1 or seq_states[i] >= data_len[ids[i]]: 
             ids[i] = counter_id + start_id
             seq_states[i] = 0
             try:
-                t_words = data[ids[i]]['text'][seq_states[i]].strip().split(" ")
+                t_words = data[ids[i]]['text'][seq_states[i]]
             except:
                 print(ids[i], seq_states[i])
             for j in range(len(t_words)):
@@ -204,7 +227,7 @@ def get_rl_batch(ids, seq_states, stop_states, counter_id, start_id, total_data)
             counter_id = counter_id % total_data
         else:
             try:
-                t_words = data[ids[i]]['text'][seq_states[i]].strip().split(" ")
+                t_words = data[ids[i]]['text'][seq_states[i]]
             except:
                 print(ids[i],seq_states[i])
             for j in range(len(t_words)):
@@ -230,7 +253,7 @@ def get_reward(isStop, ss, pys, ids, seq_ids):
             if np.argmax(pys[ids[i]][seq_ids[i]-1]) == np.argmax(data_y[ids[i]]):
                 r = 1 + FLAGS.reward_rate * math.log(reward_counter)
                 reward[i] = r
-                reward_counter += 1
+                reward_counter += 1 # more number of correct prediction, more rewards
             else:
                 reward[i] = -100
         else:
@@ -245,7 +268,7 @@ def get_new_len(sess, mm):
         init_state = np.zeros([1, FLAGS.hidden_dim], dtype=np.float32)
         e_state = sess.run(mm.df_state, feed_dict={mm.topics: init_state})
         for j in range(data_len[i]):
-            t_words = data[data_ID[i]]['text'][j].strip().split(" ")
+            t_words = data[data_ID[i]]['text'][j]
             e_x = np.zeros([1, FLAGS.max_word_len, FLAGS.hidden_dim], dtype=np.float32)
             for k in range(len(t_words)):
                 m_word = t_words[k]
@@ -271,7 +294,7 @@ def get_new_len(sess, mm):
 
 
 def get_RL_Train_batch(D):
-    s_state = np.zeros([FLAGS.batch_size, FLAGS.hidden_dim], dtype=np.float32)
+    s_state = np.zeros([FLAGS.batch_size, FLAGS.hidden_dim], dtype=np.float32) 
     s_x = np.zeros([FLAGS.batch_size, FLAGS.max_sent_len, FLAGS.hidden_dim], dtype=np.float32)
     s_isStop = np.zeros([FLAGS.batch_size, FLAGS.action_num], dtype=np.float32)
     s_rw = np.zeros([FLAGS.batch_size], dtype=np.float32)
