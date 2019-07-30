@@ -2,9 +2,11 @@
 from collections import deque
 from model import RL_GRU2
 from dataUtils import *
+from logger import MyLogger
 
 tf.logging.set_verbosity(tf.logging.ERROR)
 
+logger = MyLogger("ERDMain")
 
 def df_train(sess, mm, t_acc, t_steps, new_data_len=[]):
     sum_loss = 0.0
@@ -27,12 +29,14 @@ def df_train(sess, mm, t_acc, t_steps, new_data_len=[]):
             sum_acc = sum_acc / 100
             ret_acc = sum_acc
             print(get_curtime() + " Step: " + str(step) + " Training loss: " + str(sum_loss) + " accuracy: " + str(sum_acc))
+            logger.info(get_curtime() + " Step: " + str(step) + " Training loss: " + str(sum_loss) + " accuracy: " + str(sum_acc))
             if sum_acc > t_acc:
                 break
             sum_acc = 0.0
             sum_loss = 0.0
 
     print(get_curtime() + " Train df Model End.")
+    logger.info(get_curtime() + " Train df Model End.")
     return ret_acc
 
 
@@ -47,6 +51,7 @@ def rl_train(sess, mm, t_rw, t_steps):
     D = deque()
     ssq = []
     print("in RL the begining")
+    logger.info("in RL the begining")
     # get_new_len(sess, mm)
     if len(data_ID) % FLAGS.batch_size == 0: # the total number of events
         flags = len(data_ID) / FLAGS.batch_size
@@ -61,6 +66,7 @@ def rl_train(sess, mm, t_rw, t_steps):
         else:
             ssq = t_ssq
     print(get_curtime() + " Now Start RL training ...")
+    logger.info(get_curtime() + " Now Start RL training ...")
     counter = 0
     sum_rw = 0.0 # sum of rewards
     while True:
@@ -69,11 +75,14 @@ def rl_train(sess, mm, t_rw, t_steps):
             if counter % 200 == 0:
                 sum_rw = sum_rw / 2000
                 print(get_curtime() + " Step: " + str(step) + " REWARD IS " + str(sum_rw))
+                logger.info(get_curtime() + " Step: " + str(step) + " REWARD IS " + str(sum_rw))
                 if sum_rw > t_rw:
                     print("Retch The Target Reward")
+                    logger.info("Retch The Target Reward")
                     break
                 if counter > t_steps:
                     print("Retch The Target Steps")
+                    logger.info("Retch The Target Steps")
                     break
                 sum_rw = 0.0
             s_state, s_x, s_isStop, s_rw = get_RL_Train_batch(D)
@@ -126,8 +135,10 @@ def eval(sess, mm):
 
 if __name__ == "__main__":
     print(get_curtime() + " Loading data ...")
+    logger.info(get_curtime() + " Loading data ...")
     load_data(FLAGS.data_file_path)
     print(get_curtime() + " Data loaded.")
+    logger.info(get_curtime() + " Data loaded.")
 
     with tf.Graph().as_default():
         sess = tf.Session()
@@ -154,20 +165,25 @@ if __name__ == "__main__":
             if checkpoint and checkpoint.model_checkpoint_path:
                 saver.restore(sess, checkpoint.model_checkpoint_path)
                 print(checkpoint.model_checkpoint_path+" is restored.")
+                logger.info(checkpoint.model_checkpoint_path+" is restored.")
             else:
                 df_train(sess, mm, 0.80, 2000)
                 saver.save(sess, "df_saved/model")
                 print("df_model "+" saved")
+                logger.info("df_model "+" saved")
 
             for i in range(20):
                 rl_train(sess, mm, 0.5, 50000)
                 saver.save(sess, "rl_saved/model"+str(i))
                 print("rl_model "+str(i)+" saved")
+                logger.info("rl_model "+str(i)+" saved")
                 new_len = get_new_len(sess, mm)
                 acc = df_train(sess, mm, 0.9, 500, new_len)
                 saver.save(sess, "df_saved/model"+str(i))
                 print("df_model "+str(i)+" saved")
+                logger.info("df_model "+str(i)+" saved")
                 if acc > 0.9:
                     break
 
     print("The End of My Program")
+    logger.info("The End of My Program")

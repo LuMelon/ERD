@@ -1,8 +1,8 @@
 import tensorflow as tf
 
 
-tf.flags.DEFINE_string("w2v_file_path", "/Users/lumenglong/glove.840B.300d.txt", "w2v file")
-tf.flags.DEFINE_string("data_file_path", "/Users/lumenglong/pheme-rnr-dataset", "data_file")
+tf.flags.DEFINE_string("w2v_file_path", "/home/hadoop/glove.840B.300d.txt", "w2v file")
+tf.flags.DEFINE_string("data_file_path", "/home/hadoop/pheme-rnr-dataset", "data_file")
 
 tf.flags.DEFINE_integer("post_fn", 1, "Fixed Number of Posts")
 tf.flags.DEFINE_integer("time_limit", 48, "Posts Time Limitation (The Posts in 48 Hours)")
