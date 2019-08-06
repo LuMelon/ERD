@@ -1,12 +1,16 @@
 import tensorflow as tf
 from tensorflow.contrib import rnn
-
+from tensorflow.losses import Reduction
 
 class RL_GRU2:
-    def __init__(self, input_dim, hidden_dim, max_seq_len, max_word_len, class_num, action_num):
+    def __init__(self, input_dim, hidden_dim, max_seq_len, max_word_len, class_num, action_num, sent_num):
         self.input_x = tf.placeholder(tf.float32, [None, max_seq_len, max_word_len, input_dim], name="input_x")
         self.input_y = tf.placeholder(tf.float32, [None, class_num], name="input_y")
         self.x_len = tf.placeholder(tf.int32, [None], name="x_len")
+
+        self.sent_x = tf.placeholder(tf.float32, [None, max_word_len, input_dim], name="sent_x")
+        self.sent_y = tf.placeholder(tf.float32, [None, sent_num], name="sent_y")
+        
         self.init_states = tf.placeholder(tf.float32, [None, hidden_dim], name="topics")
         self.dropout_keep_prob = tf.placeholder(tf.float32, name="dropout_keep_prob")
 
@@ -74,6 +78,24 @@ class RL_GRU2:
         out_action = tf.reduce_sum(tf.multiply(self.stopScore, self.action), reduction_indices=1)
         self.rl_cost = tf.reduce_mean(tf.square(self.reward - out_action), name="rl_cost")
 
+        # Sentiment Analysis Task
+        self.pooled_feat = self.SentCNN(self.sent_x)
+        classifier = tf.layers.Dense(sent_num, activation= tf.nn.relu, trainable=True)
+        self.sent_scores = tf.nn.softmax(classifier(self.pooled_feat), axis=1)
+        self.sent_pred = tf.argmax(self.sent_scores, 1, name="predictions")
+        self.sent_loss = tf.losses.softmax_cross_entropy(
+                        self.sent_y,
+                        self.sent_scores,
+                        weights=1.0,
+                        label_smoothing=0,
+                        scope=None,
+                        loss_collection=tf.GraphKeys.LOSSES,
+                        reduction=Reduction.SUM_BY_NONZERO_WEIGHTS
+                    )
+        sent_correct_predictions = tf.equal(self.sent_pred, tf.argmax(self.sent_y, 1))
+        self.sent_acc = tf.reduce_mean(tf.cast(sent_correct_predictions, "float"), name="accuracy")
+
+
     def shared_pooling_layer(self, inputs, input_dim, max_seq_len, max_word_len, output_dim):
         t_inputs = tf.reshape(inputs, [-1, input_dim])
         t_h = tf.nn.xw_plus_b(t_inputs, self.w_t, self.b_t)
@@ -108,3 +130,11 @@ class RL_GRU2:
         )
         cnn_outs = tf.reshape(pooled, [-1, max_seq_len, output_dim]) 
         return cnn_outs
+
+    def SentCNN(self, input_x):
+        num_filters = 256
+        kernel_size = 5
+        conv_input = tf.layers.conv1d(input_x, num_filters, kernel_size, strides=1, padding='valid', name='conv2', trainable=True)
+        feature_map = tf.nn.relu(conv_input) # [batchsize, conv_feats, filters]
+        pooled_feat = tf.reduce_max(feature_map, 1) #[batchsize, 1, filters]
+        return pooled_feat 

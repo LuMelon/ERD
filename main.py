@@ -3,6 +3,7 @@ from collections import deque
 from model import RL_GRU2
 from dataUtils import *
 from logger import MyLogger
+import sys
 
 tf.logging.set_verbosity(tf.logging.ERROR)
 
@@ -46,29 +47,33 @@ def rl_train(sess, mm, t_rw, t_steps):
     isStop = np.zeros([FLAGS.batch_size], dtype=np.int32)
     max_id = FLAGS.batch_size
     init_states = np.zeros([FLAGS.batch_size, FLAGS.hidden_dim], dtype=np.float32)
-    state = sess.run(mm.df_state)
-
+    feed_dic = {mm.init_states: init_states}
+    state = sess.run(mm.df_state, feed_dic)
     D = deque()
     ssq = []
     print("in RL the begining")
     logger.info("in RL the begining")
     # get_new_len(sess, mm)
+    data_ID = get_data_ID()
     if len(data_ID) % FLAGS.batch_size == 0: # the total number of events
-        flags = len(data_ID) / FLAGS.batch_size
+        flags = int(len(data_ID) / FLAGS.batch_size)
     else:
-        flags = len(data_ID) / FLAGS.batch_size + 1
+        flags = int(len(data_ID) / FLAGS.batch_size) + 1
     for i in range(flags):
         x, x_len, y = get_df_batch(i)
-        feed_dic = {mm.input_x: x, mm.x_len: x_len, mm.input_y: y, mm.dropout_keep_prob: 1.0}
-        t_ssq = sess.run(mm.out_seq, feed_dic)
+        feed_dic = {mm.input_x: x, mm.x_len: x_len, mm.input_y: y, mm.init_states:init_states, mm.dropout_keep_prob: 1.0}
+        t_ssq = sess.run(mm.out_seq, feed_dic)# t_ssq = [batchsize, max_seq, scores]
         if len(ssq) > 0:
             ssq = np.append(ssq, t_ssq, axis=0)
         else:
             ssq = t_ssq
+
     print(get_curtime() + " Now Start RL training ...")
     logger.info(get_curtime() + " Now Start RL training ...")
     counter = 0
     sum_rw = 0.0 # sum of rewards
+
+    data_len = get_data_len()
     while True:
         if counter > FLAGS.OBSERVE:
             sum_rw += np.mean(rw)
@@ -98,6 +103,7 @@ def rl_train(sess, mm, t_rw, t_steps):
                 isStop[j] = np.argmax(np.random.rand(2))
             if seq_states[j] == data_len[ids[j]]:
                 isStop[j] = 1
+
         # eval
         rw = get_reward(isStop, mss, ssq, ids, seq_states)
 
@@ -109,9 +115,10 @@ def rl_train(sess, mm, t_rw, t_steps):
         state = mNewState
         for j in range(FLAGS.batch_size):
             if isStop[j] == 1:
-                init_states = np.zeros([FLAGS.batch_size, FLAGS.hidden_dim], dtype=np.float32)
-                state[j] = sess.run(mm.df_state)
-
+                # init_states = np.zeros([FLAGS.batch_size, FLAGS.hidden_dim], dtype=np.float32)
+                # feed_dic = {mm.init_states: init_states}
+                # state[j] = sess.run(mm.df_state, feed_dic)
+                state[j] = np.zeros([FLAGS.hidden_dim], dtype=np.float32)
         counter += 1
 
 
@@ -132,58 +139,56 @@ def eval(sess, mm):
 
     print(sum_acc / counter)
 
-
 if __name__ == "__main__":
     print(get_curtime() + " Loading data ...")
     logger.info(get_curtime() + " Loading data ...")
-    load_data(FLAGS.data_file_path)
+    # load_data(FLAGS.data_file_path)
+    load_data_fast()
     print(get_curtime() + " Data loaded.")
     logger.info(get_curtime() + " Data loaded.")
+    # (self, input_dim, hidden_dim, max_seq_len, max_word_len, class_num, action_num):
+    print(FLAGS.embedding_dim, FLAGS.hidden_dim, FLAGS.max_seq_len, FLAGS.max_sent_len, FLAGS.class_num, FLAGS.action_num)
+    logger.info((FLAGS.embedding_dim, FLAGS.hidden_dim, FLAGS.max_seq_len, FLAGS.max_sent_len, FLAGS.class_num, FLAGS.action_num))
+    mm = RL_GRU2(FLAGS.embedding_dim, FLAGS.hidden_dim, FLAGS.max_seq_len,
+                 FLAGS.max_sent_len, FLAGS.class_num, FLAGS.action_num, FLAGS.sent_num)
+    
+    # df model
+    df_global_step = tf.Variable(0, name="global_step", trainable=False)
+    df_train_op = tf.train.AdamOptimizer(0.01).minimize(mm.loss, df_global_step)
 
-    with tf.Graph().as_default():
-        sess = tf.Session()
-        with sess.as_default():
-            # (self, input_dim, hidden_dim, max_seq_len, max_word_len, class_num, action_num):
-            print(FLAGS.embedding_dim, FLAGS.hidden_dim, FLAGS.max_seq_len, FLAGS.max_sent_len, FLAGS.class_num, FLAGS.action_num)
-            mm = RL_GRU2(FLAGS.embedding_dim, FLAGS.hidden_dim, FLAGS.max_seq_len,
-                         FLAGS.max_sent_len, FLAGS.class_num, FLAGS.action_num)
+    # rl model
+    rl_global_step = tf.Variable(0, name="global_step", trainable=False)
+    rl_train_op = tf.train.AdamOptimizer(0.001).minimize(mm.rl_cost, rl_global_step)
+    
+    saver = tf.train.Saver(tf.global_variables(), max_to_keep=4)
+    sess = tf.Session()
+    with sess.as_default():
+        sess.run(tf.global_variables_initializer())
+    
+    ckpt_dir = "df_saved"
+    checkpoint = tf.train.get_checkpoint_state(ckpt_dir)
+    if checkpoint and checkpoint.model_checkpoint_path:
+        saver.restore(sess, checkpoint.model_checkpoint_path)
+        print(checkpoint.model_checkpoint_path+" is restored.")
+        logger.info(checkpoint.model_checkpoint_path+" is restored.")
+    else:
+        df_train(sess, mm, 0.80, 2000)
+        saver.save(sess, "df_saved/model")
+        print("df_model "+" saved")
+        logger.info("df_model "+" saved")
 
-            # df model
-            df_global_step = tf.Variable(0, name="global_step", trainable=False)
-            df_train_op = tf.train.AdamOptimizer(0.01).minimize(mm.loss, df_global_step)
-
-            # rl model
-            rl_global_step = tf.Variable(0, name="global_step", trainable=False)
-            rl_train_op = tf.train.AdamOptimizer(0.001).minimize(mm.rl_cost, rl_global_step)
-
-            saver = tf.train.Saver(tf.global_variables(), max_to_keep=4)
-
-            sess.run(tf.global_variables_initializer())
-
-            ckpt_dir = "df_saved"
-            checkpoint = tf.train.get_checkpoint_state(ckpt_dir)
-            if checkpoint and checkpoint.model_checkpoint_path:
-                saver.restore(sess, checkpoint.model_checkpoint_path)
-                print(checkpoint.model_checkpoint_path+" is restored.")
-                logger.info(checkpoint.model_checkpoint_path+" is restored.")
-            else:
-                df_train(sess, mm, 0.80, 2000)
-                saver.save(sess, "df_saved/model")
-                print("df_model "+" saved")
-                logger.info("df_model "+" saved")
-
-            for i in range(20):
-                rl_train(sess, mm, 0.5, 50000)
-                saver.save(sess, "rl_saved/model"+str(i))
-                print("rl_model "+str(i)+" saved")
-                logger.info("rl_model "+str(i)+" saved")
-                new_len = get_new_len(sess, mm)
-                acc = df_train(sess, mm, 0.9, 500, new_len)
-                saver.save(sess, "df_saved/model"+str(i))
-                print("df_model "+str(i)+" saved")
-                logger.info("df_model "+str(i)+" saved")
-                if acc > 0.9:
-                    break
+    for i in range(20):
+        rl_train(sess, mm, 0.5, 50000)
+        saver.save(sess, "rl_saved/model"+str(i))
+        print("rl_model "+str(i)+" saved")
+        logger.info("rl_model "+str(i)+" saved")
+        new_len = get_new_len(sess, mm)
+        acc = df_train(sess, mm, 0.9, 1000, new_len)
+        saver.save(sess, "df_saved/model"+str(i))
+        print("df_model "+str(i)+" saved")
+        logger.info("df_model "+str(i)+" saved")
+        if acc > 0.9:
+            break
 
     print("The End of My Program")
     logger.info("The End of My Program")

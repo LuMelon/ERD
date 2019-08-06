@@ -15,6 +15,7 @@ tf.flags.DEFINE_integer("embedding_dim", 300, "Dimensionality of word embedding 
 
 tf.flags.DEFINE_integer("class_num", 2, "#Class (Non-Rumor, Rumor)")
 tf.flags.DEFINE_integer("action_num", 2, "#Action (Continue, Stop)")
+tf.flags.DEFINE_integer("sent_num", 3, "#Sentiment Degree (negative, neural, positive)")
 
 # RL parameters;
 tf.flags.DEFINE_float("random_rate", 0.01, "RL Random Action Rate")
