@@ -1,2 +1,5 @@
-model_checkpoint_path: "model"
-all_model_checkpoint_paths: "model"
+model_checkpoint_path: "model19"
+all_model_checkpoint_paths: "../rl_saved/model18"
+all_model_checkpoint_paths: "model18"
+all_model_checkpoint_paths: "../rl_saved/model19"
+all_model_checkpoint_paths: "model19"

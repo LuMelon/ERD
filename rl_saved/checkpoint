@@ -1,0 +1,5 @@
+model_checkpoint_path: "model19"
+all_model_checkpoint_paths: "../df_saved/model17"
+all_model_checkpoint_paths: "model18"
+all_model_checkpoint_paths: "../df_saved/model18"
+all_model_checkpoint_paths: "model19"
