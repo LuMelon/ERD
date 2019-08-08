@@ -102,8 +102,13 @@ def load_data_fast():
     eval_flag = int(len(data_ID) / 4) * 3
     print("{} data loaded".format(len(data)))    
 
-def Test():
-    print("data_len:", len(data_len))
+def sortTempList(temp_list):
+    time = np.array([item[0] for item in temp_list])
+    posts = np.array([item[1] for item in temp_list])
+    idxs = time.argsort().tolist()
+    rst = [[t, p] for (t, p) in zip(time[idxs], posts[idxs])]
+    del time, posts
+    return rst
 
 def load_data(data_path):
     # get data files path
@@ -128,6 +133,7 @@ def load_data(data_path):
         temp_list = []
         for i in range(len(data[key]['text'])):
             temp_list.append([data[key]['created_at'][i], data[key]['text'][i]])
+        temp_list = sortTempList(temp_list)
         data[key]['text'] = []
         data[key]['created_at'] = []
         ttext = ""
@@ -142,8 +148,7 @@ def load_data(data_path):
                         max_sent = len(words)
                     data[key]['text'].append(words)
                     data[key]['created_at'].append(temp_list[i][0])
-                else:
-                    ttext = temp_list[i][1]
+                ttext = temp_list[i][1]
             else:
                 ttext += " " + temp_list[i][1]
             last = i
@@ -164,8 +169,8 @@ def load_data(data_path):
         else:
             data_y.append([0.0, 1.0])
     print("max_sent:", max_sent, ",  max_seq_len:", max(data_len))
-    tf.flags.DEFINE_integer("max_seq_len", max(data_len), "Max length of sequence (default: 300)")
-    tf.flags.DEFINE_integer("max_sent_len", max_sent, "Max length of sentence (default: 300)")
+    # tf.flags.DEFINE_integer("max_seq_len", max(data_len), "Max length of sequence (default: 300)")
+    # tf.flags.DEFINE_integer("max_sent_len", max_sent, "Max length of sentence (default: 300)")
     eval_flag = int(len(data_ID) / 4) * 3
     print("{} data loaded".format(len(data)))
 
@@ -203,7 +208,8 @@ def get_df_batch(start, new_data_len=[]):
             #         raise
             #     else:
             #         hit_vec += 1
-            data_x[i][j][:len(t_words)] = c2vec.vectorize_words(t_words)
+            if len(t_words) != 0:
+                data_x[i][j][:len(t_words)] = c2vec.vectorize_words(t_words)
         mts += 1
         if mts >= len(data_ID): # read data looply
             mts = mts % len(data_ID)

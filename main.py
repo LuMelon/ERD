@@ -25,9 +25,9 @@ def df_train(sess, mm, t_acc, t_steps, new_data_len=[]):
         sum_loss += loss
         sum_acc += acc
 
-        if i % 100 == 99:
-            sum_loss = sum_loss / 100
-            sum_acc = sum_acc / 100
+        if i % 10 == 9:
+            sum_loss = sum_loss / 10
+            sum_acc = sum_acc / 10
             ret_acc = sum_acc
             print(get_curtime() + " Step: " + str(step) + " Training loss: " + str(sum_loss) + " accuracy: " + str(sum_acc))
             logger.info(get_curtime() + " Step: " + str(step) + " Training loss: " + str(sum_loss) + " accuracy: " + str(sum_acc))

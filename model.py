@@ -98,7 +98,8 @@ class RL_GRU2:
 
     def shared_pooling_layer(self, inputs, input_dim, max_seq_len, max_word_len, output_dim):
         t_inputs = tf.reshape(inputs, [-1, input_dim])
-        t_h = tf.nn.xw_plus_b(t_inputs, self.w_t, self.b_t)
+        # t_h = tf.nn.xw_plus_b(t_inputs, self.w_t, self.b_t)
+        t_h = tf.matmul(t_inputs, self.w_t)
         t_h = tf.reshape(t_h, [-1, max_word_len, output_dim])
         t_h_expended = tf.expand_dims(t_h, -1)
         pooled = tf.nn.max_pool(
@@ -137,4 +138,5 @@ class RL_GRU2:
         conv_input = tf.layers.conv1d(input_x, num_filters, kernel_size, strides=1, padding='valid', name='conv2', trainable=True)
         feature_map = tf.nn.relu(conv_input) # [batchsize, conv_feats, filters]
         pooled_feat = tf.reduce_max(feature_map, 1) #[batchsize, 1, filters]
+
         return pooled_feat 
