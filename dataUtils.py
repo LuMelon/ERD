@@ -154,7 +154,8 @@ def load_data(data_path):
             last = i
         # keep the last one
         if len(ttext) > 0:
-            words = list( filter(lambda s: len(s)>0, [transIrregularWord(word) for word in re.split('([,\n ]+)', ttext.strip() )]) )
+            # words = list( filter(lambda s: len(s)>0, [transIrregularWord(word) for word in re.split('([,\n ]+)', ttext.strip() )]) )
+            words = list(filter(lambda x:x!=' ' and x!='', re.split('([,\n .]+)', ttext.strip()) ))
             if len(words) > max_sent:
                 max_sent = len(words)
             data[key]['text'].append(words)
