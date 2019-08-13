@@ -108,7 +108,7 @@ def tdnn(input_, kernels, kernel_features, scope='TDNN'):
     return output
 
 
-def inference_graph(char_vocab_size, word_vocab_size,
+def inference_graph(char_vocab_size, word_vocab_size, input_, 
                     char_embed_size=15,
                     batch_size=20,
                     num_highway_layers=2,
@@ -118,11 +118,12 @@ def inference_graph(char_vocab_size, word_vocab_size,
                     kernels         = [ 1,   2,   3,   4,   5,   6,   7],
                     kernel_features = [50, 100, 150, 200, 200, 200, 200],
                     num_unroll_steps=35,
-                    dropout=0.0):
+                    dropout=0.0
+                    ):
 
     assert len(kernels) == len(kernel_features), 'Kernel and Features must have the same size'
 
-    input_ = tf.placeholder(tf.int32, shape=[batch_size, num_unroll_steps, max_word_length], name="input")
+    # input_ = tf.placeholder(tf.int32, shape=[batch_size, num_unroll_steps, max_word_length], name="input")
 
     ''' First, embed characters '''
     with tf.variable_scope('Embedding'):
@@ -178,7 +179,7 @@ def inference_graph(char_vocab_size, word_vocab_size,
                 logits.append(linear(output, word_vocab_size))
 
     return adict(
-        input = input_,
+        # input = input_,
         clear_char_embedding_padding=clear_char_embedding_padding,
         input_embedded=input_embedded,
         input_cnn=input_cnn,
@@ -238,6 +239,7 @@ def model_size():
 
 
 if __name__ == '__main__':
+    print("start main")
 
     with tf.Session() as sess:
 

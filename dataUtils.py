@@ -291,8 +291,8 @@ def get_new_len(sess, mm):
     new_x_len = np.zeros([len(data_ID)], dtype=np.int32)
 
     for i in range(len(data_ID)):
-        init_state = np.zeros([1, FLAGS.hidden_dim], dtype=np.float32)
-        e_state = sess.run(mm.df_state, feed_dict={mm.init_states: init_state})
+        e_state = np.zeros([1, FLAGS.hidden_dim], dtype=np.float32)
+        # e_state = sess.run(mm.df_state, feed_dict={mm.init_states: init_state})
         for j in range(data_len[i]):
             t_words = data[data_ID[i]]['text'][j]
             e_x = np.zeros([1, FLAGS.max_sent_len, FLAGS.embedding_dim], dtype=np.float32)
