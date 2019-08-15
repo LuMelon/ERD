@@ -199,7 +199,7 @@ def infer_train_model(word2vec, LM,
 def Train_Char_Model(session, train_model, train_reader, saver, summary_writer):
     best_valid_loss = None
     rnn_state = session.run(train_model.initial_rnn_state)
-    for epoch in range(1):
+    for epoch in range(FLAGS.max_epochs):
         epoch_start_time = time.time()
         avg_train_loss = 0.0
         count = 0
