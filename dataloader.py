@@ -101,19 +101,6 @@ def GetTestData(batchId, batchsize, embedding_dim):
     for i in range(batchsize):
         mts = int(np.random.uniform()*testVol)
         data_y[i][int(testlabel[mts]/2)] = 1
-    #     for j in range(len(testset[mts])):
-    #         try:
-    #             data_x[i][j] = word2vec[testset[mts][j]]
-    #         except KeyError:
-    #             print("word:", testset[mts][j])
-    #             miss_vec += 1
-    #         except IndexError:
-    #             print("i, j, k:", batch_size, '|',t_data_len[mts] ,'|', len(t_words))
-    #             print("word:", testset[mts][j], "(", i, j, k, ")")
-    #             raise
-    #         else:
-    #             hit_vec += 1
         data_x[i][:len(testset[mts])] = c2vec.vectorize_words(testset[mts])
     # print("hit_vec | miss_vec:", hit_vec, '|', miss_vec)
     return data_x, data_y
-
