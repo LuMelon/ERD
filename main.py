@@ -10,7 +10,7 @@ tf.logging.set_verbosity(tf.logging.ERROR)
 
 logger = MyLogger("ERDMain")
 
-def df_train(sess, charm, mm, t_acc, t_steps, new_data_len=[]):
+def df_train(sess, charm, mm, char_input, t_acc, t_steps, new_data_len=[]):
     sum_loss = 0.0
     sum_acc = 0.0
     ret_acc = 0.0
@@ -70,6 +70,7 @@ def rl_train(sess, df_model, rl_model, t_rw, t_steps):
 
     print(get_curtime() + " Now Start RL training ...")
     logger.info(get_curtime() + " Now Start RL training ...")
+    
     counter = 0
     sum_rw = 0.0 # sum of rewards
 
@@ -228,8 +229,6 @@ if __name__ == "__main__":
 
     # df model
     df_model = mm.RDM_model(FLAGS.class_num)
-    df_global_step = tf.Variable(0, name="global_step", trainable=False)
-    df_train_op = tf.train.AdamOptimizer(0.01).minimize(df_model.loss, df_global_step)
 
     # rl model
     rl_model = mm.CM_model(FLAGS.action_num)

@@ -22,8 +22,8 @@ class RL_GRU2:
         self.df_cell = rnn.GRUCell(self.hidden_dim)
         self.df_cell = rnn.DropoutWrapper(self.df_cell, output_keep_prob=self.dropout_keep_prob)
 
-    def RDM_model(self, class_num):
-        input_x = tf.placeholder(tf.float32, [None, self.max_seq_len, self.max_word_num, self.embedding_dim], name="input_x")
+    def RDM_model(self, input_x, class_num):
+        # input_x = tf.placeholder(tf.float32, [None, self.max_seq_len, self.max_word_num, self.embedding_dim], name="input_x")
         input_y = tf.placeholder(tf.float32, [None, class_num], name="input_y")
         x_len = tf.placeholder(tf.int32, [None], name="x_len")
         init_states = tf.placeholder(tf.float32, [None, self.hidden_dim], name="topics")
@@ -52,7 +52,7 @@ class RL_GRU2:
         accuracy = tf.reduce_mean(tf.cast(correct_predictions, "float"), name="accuracy")
         return adict(
                 dropout_keep_prob = self.dropout_keep_prob,
-                input_x = input_x,
+                # input_x = input_x,
                 input_y = input_y,
                 x_len = x_len,
                 init_states = init_states,
