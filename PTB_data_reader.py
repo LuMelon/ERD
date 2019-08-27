@@ -5,7 +5,8 @@ import os
 import codecs
 import collections
 import numpy as np
-
+import pickle
+import config
 
 class Vocab:
 
@@ -49,13 +50,31 @@ class Vocab:
 
         return cls(token2index, index2token)
 
+def load_data_fast():
+  
+    with open('data/char_tensors.txt', 'rb') as handle:
+        char_tensors = pickle.load(handle)
 
-def load_data(data_dir, max_word_length, idx2char=None, char2idx=None, idx2word=None, word2idx=None, eos='+'):
+    with open('data/word_tensors.txt', 'rb') as handle:
+        word_tensors = pickle.load(handle)
 
-    char_vocab = Vocab(char2idx, idx2char)
-    char_vocab.feed(' ')  # blank is at index 0 in char vocab
-    char_vocab.feed('{')  # start is at index 1 in char vocab
-    char_vocab.feed('}')  # end   is at index 2 in char vocab
+    with open('data/char_vocab.txt', 'rb') as handle:
+        char_vocab = pickle.load(handle)
+
+    with open('data/word_vocab.txt', 'rb') as handle:
+        word_vocab = pickle.load(handle)
+
+    return word_vocab, char_vocab, word_tensors, char_tensors
+    
+
+
+
+def load_data(data_dir, max_word_length, char_vocab, idx2char=None, char2idx=None, idx2word=None, word2idx=None, eos='+'):
+
+    # char_vocab = Vocab(char2idx, idx2char)
+    # char_vocab.feed(' ')  # blank is at index 0 in char vocab
+    # char_vocab.feed('{')  # start is at index 1 in char vocab
+    # char_vocab.feed('}')  # end   is at index 2 in char vocab
 
     word_vocab = Vocab(word2idx, idx2word)
     word_vocab.feed('|')  # <unk> is at index 0 in word vocab

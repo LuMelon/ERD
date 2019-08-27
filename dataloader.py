@@ -3,13 +3,14 @@ import pandas as pd
 import os
 import numpy as np
 import keras
+import pickle
 
 class SentiDataLoader:
-    def __init__(self, dirpath, trainfile, testfile, char_list):
+    def __init__(self, dirpath, trainfile, testfile, charVocab):
         self.dirpath = dirpath
         self.trainfile = trainfile
         self.testfile = testfile
-        self.s = char_list
+        self.charVocab = charVocab
 
     def load_data(self): # charVocab is a char-to-idx dictionary:{char:idx}
         def transIrregularWord(word):
@@ -57,21 +58,40 @@ class SentiDataLoader:
             labels = [instance[1] for instance in instances]
             return texts, labels
         
-        charVocab = {c:idx for (idx, c) in enumerate(self.s)}
+        # charVocab = {c:idx for (idx, c) in enumerate(self.s)}
         texts, self.train_label = CSVFile2Dataset(os.path.join(self.dirpath, self.trainfile))
-        self.train_data = [list(word2chars(word, charVocab) for word in sentence) for sentence in texts]
+        self.train_data = [list(word2chars(word, self.charVocab) for word in sentence) for sentence in texts]
         texts, self.test_label = CSVFile2Dataset(os.path.join(self.dirpath, self.testfile))
-        self.test_data = [list(word2chars(word, charVocab) for word in sentence) for sentence in texts]
+        self.test_data = [list(word2chars(word, self.charVocab) for word in sentence) for sentence in texts]
         del texts
         self.max_sent_len = max([max(len(sent) for sent in texts) for texts in [self.train_data, self.test_data]])
         self.max_char_num = max(
                                 max([max(len(word) for word in sent) for sent in self.test_data]), 
                                 max([max(len(word) for word in sent) for sent in self.train_data])
                                )
+    def load_data_fast(self, train_data_path, train_label_path, 
+                        test_data_path, test_label_path):
+        with open(train_label_path, "rb") as handle:
+            self.train_label = pickle.load(handle)
+        
+        with open(train_data_path, "rb") as handle:
+            self.train_data = pickle.load(handle)
 
-    def GetTrainingBatch(self, batchId, batchsize):
+        with open(test_label_path, "rb") as handle:
+            self.test_label = pickle.load(handle)
+
+        with open(test_data_path, "rb") as handle:
+            self.test_data = pickle.load(handle)
+        self.max_sent_len = max([max(len(sent) for sent in texts) for texts in [self.train_data, self.test_data]])
+        self.max_char_num = max(
+                                max([max(len(word) for word in sent) for sent in self.test_data]), 
+                                max([max(len(word) for word in sent) for sent in self.train_data])
+                               )
+
+    def GetTrainingBatch(self, batchId, batchsize, max_word_num = 31, max_char_num = 21):
         def padding_sequence(max_len, sentence):
-            return keras.preprocessing.sequence.pad_sequences(
+            placeholder = np.zeros([max_word_num, max_char_num], np.int32)
+            rst = keras.preprocessing.sequence.pad_sequences(
                                                         sentence, 
                                                         maxlen=max_len, 
                                                         dtype='int32', 
@@ -79,21 +99,24 @@ class SentiDataLoader:
                                                         truncating='post',
                                                         value=0.0
             )
-        
+            placeholder[:len(rst)] = rst
+            return placeholder
+
         startIdx = batchId*batchsize
         data_y = np.zeros([batchsize, 3], dtype=np.int32)
         ids = [idx%len(self.train_data) for idx in range(startIdx, startIdx+batchsize, 1)]
         data_x = np.array(
-                        [padding_sequence(41, self.train_data[x]).tolist() 
+                        [padding_sequence(max_char_num, self.train_data[x]).tolist() 
                         for x in ids]
         )
-        for idx in ids:
-            data_y[idx][int(self.train_label[idx]/2)] = 1
+        for i in range(batchsize):
+            data_y[i][ int(self.train_label[ids[i]]/2) ] = 1
         return data_x, data_y
     
-    def GetTestData(self, batchId, batchsize):
+    def GetTestData(self, batchId, batchsize, max_char_num):
         def padding_sequence(max_len, sentence):
-            return keras.preprocessing.sequence.pad_sequences(
+            placeholder = np.zeros([max_word_num, max_char_num], np.int32)
+            rst = keras.preprocessing.sequence.pad_sequences(
                                                         sentence, 
                                                         maxlen=max_len, 
                                                         dtype='int32', 
@@ -101,12 +124,14 @@ class SentiDataLoader:
                                                         truncating='post',
                                                         value=0.0
             )
+            placeholder[:len(rst)] = rst
+            return placeholder
         
         startIdx = batchId*batchsize
         data_y = np.zeros([batchsize, 3], dtype=np.int32)
         ids = [idx%len(self.test_data) for idx in range(startIdx, startIdx+batchsize, 1)]
         data_x = np.array(
-                        [padding_sequence(41, self.test_data[x]).tolist() 
+                        [padding_sequence(max_char_num, self.test_data[x]).tolist() 
                         for x in ids]
         )
         for idx in ids:

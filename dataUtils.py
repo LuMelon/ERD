@@ -11,16 +11,33 @@ import chars2vec
 import re
 import tensorflow as tf
 import pickle
+import keras
+import PTB_data_reader
 
 files = []
 data = {}
 data_ID = []
 data_len = []
 data_y = []
+
+#init char vocab
+charsVec = ['UNK', ' ', '!', '#', '$', '%', '&', "'", '(', ')', 
+     '*', '+', ',', '-', '.', '/', '0', '1', '2', '3', '4',
+     '5', '6', '7', '8', '9', ':', ';', '?', '@', '[', ']',
+     '^', '_', '`', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 
+     'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 
+     't', 'u', 'v', 'w', 'x', 'y', 'z', '{', '}', '~', '—', 
+     '“', '”', '"', "’"]
+charsVocab = {char:idx for (idx, char) in enumerate(charsVec)}
+char_vocab = PTB_data_reader.Vocab(token2index=charsVocab, index2token=charsVec)
 # word2vec = gensim.models.KeyedVectors.load_word2vec_format('/home/hadoop/word2vec.model')
-c2vec = chars2vec.load_model('eng_300')
+# c2vec = chars2vec.load_model('eng_300')
 reward_counter = 0
 eval_flag = 0
+
+def get_data():
+    global data
+    return data
 
 def get_data_ID():
     global data_ID
@@ -88,6 +105,24 @@ def transIrregularWord(word):
     else:
         return  word
 
+def sortTempList(temp_list):
+    time = np.array([item[0] for item in temp_list])
+    posts = np.array([item[1] for item in temp_list])
+    idxs = time.argsort().tolist()
+    rst = [[t, p] for (t, p) in zip(time[idxs], posts[idxs])]
+    del time, posts
+    return rst
+
+def Word2IDs(word):
+    rst = [charsVocab.get(char) for char in word]
+    for i in range(len(rst)):
+        if rst[i] is None:
+            rst[i] = 0
+            print("Unknown char:", word[i])
+            print("Word:", word)
+    return rst
+
+
 def load_data_fast():
     global data, data_ID, data_len, data_y, eval_flag
     with open("data/data_dict.txt", "rb") as handle:
@@ -102,13 +137,6 @@ def load_data_fast():
     eval_flag = int(len(data_ID) / 4) * 3
     print("{} data loaded".format(len(data)))    
 
-def sortTempList(temp_list):
-    time = np.array([item[0] for item in temp_list])
-    posts = np.array([item[1] for item in temp_list])
-    idxs = time.argsort().tolist()
-    rst = [[t, p] for (t, p) in zip(time[idxs], posts[idxs])]
-    del time, posts
-    return rst
 
 def load_data(data_path):
     # get data files path
@@ -154,8 +182,8 @@ def load_data(data_path):
             last = i
         # keep the last one
         if len(ttext) > 0:
-            # words = list( filter(lambda s: len(s)>0, [transIrregularWord(word) for word in re.split('([,\n ]+)', ttext.strip() )]) )
-            words = list(filter(lambda x:x!=' ' and x!='', re.split('([,\n .]+)', ttext.strip()) ))
+            words = list( filter(lambda s: len(s)>0, [transIrregularWord(word) for word in re.split('([,\n ]+)', ttext.strip() )]) )
+#             words = list(filter(lambda x:x!=' ' and x!='', re.split('([,\n .]+)', ttext.strip()) ))
             if len(words) > max_sent:
                 max_sent = len(words)
             data[key]['text'].append(words)
@@ -170,18 +198,16 @@ def load_data(data_path):
         else:
             data_y.append([0.0, 1.0])
     print("max_sent:", max_sent, ",  max_seq_len:", max(data_len))
-    # tf.flags.DEFINE_integer("max_seq_len", max(data_len), "Max length of sequence (default: 300)")
-    # tf.flags.DEFINE_integer("max_sent_len", max_sent, "Max length of sentence (default: 300)")
+    tf.flags.DEFINE_integer("max_seq_len", max(data_len), "Max length of sequence (default: 300)")
+    tf.flags.DEFINE_integer("max_sent_len", max_sent, "Max length of sentence (default: 300)")
     eval_flag = int(len(data_ID) / 4) * 3
     print("{} data loaded".format(len(data)))
 
-
 def get_df_batch(start, new_data_len=[]):
-    data_x = np.zeros([FLAGS.batch_size, FLAGS.max_seq_len, FLAGS.max_sent_len, FLAGS.embedding_dim], dtype=np.float32)
+    data_x = np.zeros([FLAGS.batch_size, FLAGS.max_seq_len, FLAGS.max_sent_len, FLAGS.max_char_num], 
+                      dtype=np.int32)
     m_data_y = np.zeros([FLAGS.batch_size, 2], dtype=np.int32)
     m_data_len = np.zeros([FLAGS.batch_size], dtype=np.int32)
-    # miss_vec = 0
-    # hit_vec = 0
     if len(new_data_len) > 0:
         t_data_len = new_data_len
     else:
@@ -189,44 +215,32 @@ def get_df_batch(start, new_data_len=[]):
     mts = start * FLAGS.batch_size
     if mts >= len(data_ID):
         mts = mts % len(data_ID)
-
+    
     for i in range(FLAGS.batch_size):
         m_data_y[i] = data_y[mts]
         m_data_len[i] = t_data_len[mts]
         for j in range(t_data_len[mts]):
             t_words = data[data_ID[mts]]['text'][j]
-            # for k in range(len(t_words)):
-            #     m_word = t_words[k]
-            #     try:
-            #         # data_x[i][j][k] = c2vec.vectorize_words([m_word])[0]
-            #         data_x[i][j][k] = word2vec[m_word]
-            #     except KeyError:
-            #         print("word:", m_word)
-            #         miss_vec += 1
-            #     except IndexError:
-            #         print("i, j, k:", FLAGS.batch_size, '|',t_data_len[mts] ,'|', len(t_words))
-            #         print("word:", m_word, "(", i, j, k, ")")
-            #         raise
-            #     else:
-            #         hit_vec += 1
-            if len(t_words) != 0:
-                data_x[i][j][:len(t_words)] = c2vec.vectorize_words(t_words)
+            sentence = list(map(lambda word:Word2IDs(word), t_words))
+            sent_arr = keras.preprocessing.sequence.pad_sequences(
+                                                    sentence, 
+                                                    maxlen= FLAGS.max_char_num, 
+                                                    dtype='int32', 
+                                                    padding='post', 
+                                                    truncating='post',
+                                                    value=0.0
+                        )
+            data_x[i][j][:len(sentence)]=sent_arr
         mts += 1
         if mts >= len(data_ID): # read data looply
             mts = mts % len(data_ID)
-
-    # print("hit_vec | miss_vec:", hit_vec, '|', miss_vec)
     return data_x, m_data_len, m_data_y
 
-
-# seq_states is the date_x to get
-# max_id is the next corpus to take
 def get_rl_batch(ids, seq_states, stop_states, counter_id, start_id, total_data):
-    input_x = np.zeros([FLAGS.batch_size, FLAGS.max_sent_len, FLAGS.embedding_dim], dtype=np.float32)
+    input_x = np.zeros([FLAGS.batch_size, FLAGS.max_sent_len, FLAGS.max_char_num], dtype=np.float32)
     input_y = np.zeros([FLAGS.batch_size, FLAGS.class_num], dtype=np.float32)
     miss_vec = 0
     total_data = len(data_len)
-
     for i in range(FLAGS.batch_size):
         # seq_states:records the id of a sentence in a sequence
         # stop_states: records whether the sentence is judged by the program
@@ -237,14 +251,18 @@ def get_rl_batch(ids, seq_states, stop_states, counter_id, start_id, total_data)
                 t_words = data[ data_ID[ids[i]] ]['text'][seq_states[i]]
             except:
                 print(ids[i], seq_states[i])
-            # for j in range(len(t_words)):
-            #     m_word = t_words[j]
-            #     try:
-            #         input_x[i][j] = word2vec[m_word]
-            #     except:
-            #         miss_vec = 1
+                t_words = []
             if len(t_words) != 0:
-                input_x[i][:len(t_words)] = c2vec.vectorize_words(t_words)
+                sentence = list(map(lambda word:Word2IDs(word), t_words))
+                sent_arr = keras.preprocessing.sequence.pad_sequences(
+                                                        sentence, 
+                                                        maxlen= FLAGS.max_char_num, 
+                                                        dtype='int32', 
+                                                        padding='post', 
+                                                        truncating='post',
+                                                        value=0.0
+                            )
+                input_x[i][:len(sentence)] = sent_arr
             input_y[i] = data_y[ids[i]]
             counter_id += 1
             counter_id = counter_id % total_data
@@ -254,14 +272,17 @@ def get_rl_batch(ids, seq_states, stop_states, counter_id, start_id, total_data)
             except:
                 print("ids and seq_states:", ids[i], seq_states[i])
                 t_words = []
-            # for j in range(len(t_words)):
-            #     m_word = t_words[j]
-            #     try:
-            #         input_x[i][j] = word2vec[m_word]
-            #     except:
-            #         miss_vec += 1
             if len(t_words) != 0:
-                input_x[i][:len(t_words)] = c2vec.vectorize_words(t_words)
+                sentence = list(map(lambda word:Word2IDs(word), t_words))
+                sent_arr = keras.preprocessing.sequence.pad_sequences(
+                                                        sentence, 
+                                                        maxlen= FLAGS.max_char_num, 
+                                                        dtype='int32', 
+                                                        padding='post', 
+                                                        truncating='post',
+                                                        value=0.0
+                            )
+                input_x[i][:len(sentence)] = sent_arr
             input_y[i] = data_y[ids[i]]
         # point to the next sequence
         seq_states[i] += 1

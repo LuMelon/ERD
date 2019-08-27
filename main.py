@@ -1,10 +1,15 @@
 # coding: utf-8
 from collections import deque
-from model import RL_GRU2
+import model
 from dataUtils import *
 from logger import MyLogger
 import sys
 import PTB_data_reader
+import time
+import numpy as np
+import lstm_char_cnn
+import config
+import dataloader
 
 tf.logging.set_verbosity(tf.logging.ERROR)
 
@@ -70,7 +75,7 @@ def rl_train(sess, df_model, rl_model, t_rw, t_steps):
 
     print(get_curtime() + " Now Start RL training ...")
     logger.info(get_curtime() + " Now Start RL training ...")
-    
+
     counter = 0
     sum_rw = 0.0 # sum of rewards
 
@@ -123,124 +128,136 @@ def rl_train(sess, df_model, rl_model, t_rw, t_steps):
         counter += 1
 
 
-def eval(sess, mm):
-    start_ef = int(eval_flag / FLAGS.batch_size)
-    end_ef = int(len(data_ID) / FLAGS.batch_size) + 1
-    init_states = np.zeros([FLAGS.batch_size, FLAGS.hidden_dim], dtype=np.float32)
+# def eval(sess, mm):
+#     start_ef = int(eval_flag / FLAGS.batch_size)
+#     end_ef = int(len(data_ID) / FLAGS.batch_size) + 1
+#     init_states = np.zeros([FLAGS.batch_size, FLAGS.hidden_dim], dtype=np.float32)
 
-    counter = 0
-    sum_acc = 0.0
+#     counter = 0
+#     sum_acc = 0.0
 
-    for i in range(start_ef, end_ef):
-        x, x_len, y = get_df_batch(i)
-        feed_dic = {mm.input_x: x, mm.x_len: x_len, mm.input_y: y, mm.init_states: init_states, mm.dropout_keep_prob: 1.0}
-        _, step, loss, acc = sess.run([df_train_op, df_global_step, mm.loss, mm.accuracy], feed_dic)
-        counter += 1
-        sum_acc += acc
+#     for i in range(start_ef, end_ef):
+#         x, x_len, y = get_df_batch(i)
+#         feed_dic = {mm.input_x: x, mm.x_len: x_len, mm.input_y: y, mm.init_states: init_states, mm.dropout_keep_prob: 1.0}
+#         _, step, loss, acc = sess.run([df_train_op, df_global_step, mm.loss, mm.accuracy], feed_dic)
+#         counter += 1
+#         sum_acc += acc
 
-    print(sum_acc / counter)
-
-import time
-import numpy as np
-def Train_Char_Model(session, input_train, train_model, train_reader, saver, summary_writer):
-    best_valid_loss = None
-    rnn_state = session.run(train_model.initial_rnn_state)
-#     for epoch in range(FLAGS.max_epochs):
-    for epoch in range(1):
-        epoch_start_time = time.time()
-        avg_train_loss = 0.0
-        count = 0
-        for x, y in train_reader.iter():
-            count += 1
-            start_time = time.time()
-
-            loss, _, rnn_state, gradient_norm, step, _ = session.run([
-                train_model.loss,
-                train_model.train_op,
-                train_model.final_rnn_state,
-                train_model.global_norm,
-                train_model.global_step,
-                train_model.clear_char_embedding_padding
-            ], {
-                input_train: x,
-                train_model.targets: y,
-                train_model.initial_rnn_state: rnn_state
-            })
-
-            summary = tf.Summary(value=[
-                tf.Summary.Value(tag="step_train_loss", simple_value=loss),
-                tf.Summary.Value(tag="step_train_perplexity", simple_value=np.exp(loss)),
-            ])
-            summary_writer.add_summary(summary, step)
-
-            avg_train_loss += 0.05 * (loss - avg_train_loss)
-
-            time_elapsed = time.time() - start_time
-
-            if count % FLAGS.print_every == 0:
-                print('%6d: %d [%5d/%5d], train_loss/perplexity = %6.8f/%6.7f secs/batch = %.4fs, grad.norm=%6.8f' % (step,
-                                                        epoch, count,
-                                                        train_reader.length,
-                                                        loss, np.exp(loss),
-                                                        time_elapsed,
-                                                        gradient_norm))
-                break
-        print('Epoch training time:', time.time()-epoch_start_time)
-        save_as = '%s/epoch%03d_%.4f.model' % (FLAGS.train_dir, epoch, avg_train_loss)
-        saver.save(session, save_as)
-        print('Saved char model', save_as)
+#     print(sum_acc / counter)
 
 if __name__ == "__main__":
     print(get_curtime() + " Loading data ...")
     logger.info(get_curtime() + " Loading data ...")
+
+    #load PTB data
+    # word_vocab, char_vocab, word_tensors, char_tensors, max_word_length = \
+    #     PTB_data_reader.load_data(FLAGS.data_dir, FLAGS.max_word_length, eos=FLAGS.EOS)
+    word_vocab, char_vocab, word_tensors, char_tensors, max_word_length = \
+        PTB_data_reader.load_data_fast()
+    train_reader = PTB_data_reader.DataReader(word_tensors['train'], char_tensors['train'],
+                              FLAGS.batch_size, FLAGS.num_unroll_steps) 
+    
+    #load sentiment analysis data
+    # sentiReader = dataloader.SentiDataLoader(
+    #                                         dirpath = '/home/hadoop/trainingandtestdata',
+    #                                         trainfile = 'training.1600000.processed.noemoticon.csv', 
+    #                                         testfile = 'testdata.manual.2009.06.14.csv', 
+    #                                         charVocab = char_vocab
+    #                         )
+    # sentiReader.load_data()
+    with open('data/sentiReader.txt', 'rb') as handle:
+        sentiReader = pickle.load(handle)
+
+    # load twitter data
     # load_data(FLAGS.data_file_path)
     load_data_fast()
+
+    # (self, input_dim, hidden_dim, max_seq_len, max_word_num, class_num, action_num):
+    print(  FLAGS.embedding_dim, FLAGS.hidden_dim, 
+                FLAGS.max_seq_len, FLAGS.max_sent_len, 
+                    FLAGS.class_num, FLAGS.action_num   )
+    logger.info(    (FLAGS.embedding_dim, FLAGS.hidden_dim, 
+                        FLAGS.max_seq_len, FLAGS.max_sent_len, 
+                            FLAGS.class_num, FLAGS.action_num)  )
+
     print(get_curtime() + " Data loaded.")
     logger.info(get_curtime() + " Data loaded.")
-    # (self, input_dim, hidden_dim, max_seq_len, max_word_num, class_num, action_num):
-    print(FLAGS.embedding_dim, FLAGS.hidden_dim, FLAGS.max_seq_len, FLAGS.max_sent_len, FLAGS.class_num, FLAGS.action_num)
-    logger.info((FLAGS.embedding_dim, FLAGS.hidden_dim, FLAGS.max_seq_len, FLAGS.max_sent_len, FLAGS.class_num, FLAGS.action_num))
-    mm = RL_GRU2(FLAGS.max_char_num, FLAGS.max_sent_len, FLAGS.max_seq_len, FLAGS.embedding_dim, FLAGS.hidden_dim)
-    
-    #char model
-    word_vocab, char_vocab, word_tensors, char_tensors, max_word_length = \
-        PTB_data_reader.load_data(FLAGS.data_dir, FLAGS.max_word_length, eos=FLAGS.EOS)
-    train_reader = PTB_data_reader.DataReader(word_tensors['train'], char_tensors['train'],
-                              FLAGS.batch_size, FLAGS.num_unroll_steps)
-    char_train = lstm_char_cnn.inference_graph(
-                    char_vocab_size=char_vocab.size,
-                    word_vocab_size=word_vocab.size,
-                    char_embed_size=FLAGS.char_embed_size,
-                    batch_size=FLAGS.batch_size,
-                    num_highway_layers=FLAGS.highway_layers,
-                    num_rnn_layers=FLAGS.rnn_layers,
-                    rnn_size=FLAGS.rnn_size,
-                    max_word_length=max_word_length,
-                    kernels=eval(FLAGS.kernels),
-                    kernel_features=eval(FLAGS.kernel_features),
-                    num_unroll_steps=FLAGS.num_unroll_steps,
-                    dropout=FLAGS.dropout
-    )
-    char_train.update(lstm_char_cnn.loss_graph(char_train.logits, FLAGS.batch_size, FLAGS.num_unroll_steps))
-    char_train.update(lstm_char_cnn.training_graph(char_train.loss * FLAGS.num_unroll_steps,
-                    FLAGS.learning_rate, FLAGS.max_grad_norm))
 
+    # char-level language model
+    w2v = lstm_char_cnn.WordEmbedding(
+                max_word_length = FLAGS.max_char_num , 
+                char_vocab_size = char_vocab.size, 
+                char_embed_size = FLAGS.char_embed_size, 
+                kernels = eval(FLAGS.kernels), 
+                kernel_features = eval(FLAGS.kernel_features), 
+                num_highway_layers = FLAGS.highway_layers,
+                embedding_dim = FLAGS.embedding_dim
+            )
+    lstm_lm = lstm_char_cnn.LSTM_LM(
+                batch_size = FLAGS.batch_size, 
+                num_unroll_steps = FLAGS.num_unroll_steps, 
+                rnn_size = FLAGS.rnn_size, 
+                num_rnn_layers = FLAGS.rnn_layers, 
+                word_vocab_size = word_vocab.size
+            )
 
-
+    char_train_graph = lstm_char_cnn.infer_train_model(
+                        w2v, lstm_lm, 
+                        batch_size = FLAGS.batch_size, 
+                        num_unroll_steps = FLAGS.num_unroll_steps, 
+                        max_word_length = FLAGS.max_char_num, 
+                        learning_rate = FLAGS.learning_rate,
+                        max_grad_norm = FLAGS.max_grad_norm
+                     )
+    #sentiment analysis model
+    s_model = model.SentiModel(FLAGS.hidden_dim, 5)
+    senti_train_graph = model.InferSentiTrainGraph(
+                            w2v, 
+                            s_model, 
+                            max_word_num = FLAGS.max_sent_len, 
+                            max_char_num = FLAGS.max_char_num, 
+                            hidden_dim = FLAGS.hidden_dim, 
+                            sent_num = FLAGS.sent_num,
+                            embedding_dim = FLAGS.embedding_dim
+                        )
     # df model
-    df_model = mm.RDM_model(FLAGS.class_num)
+    rdm_model = model.RDM_Model(
+                    max_seq_len = FLAGS.max_seq_len, 
+                    max_word_num = FLAGS.max_sent_len, 
+                    embedding_dim = FLAGS.embedding_dim, 
+                    hidden_dim = FLAGS.hidden_dim
+                )
+    rdm_train_graph = model.InferRDMTrainGraph(
+                            w2v, s_model, rdm_model, 
+                            max_seq_len = FLAGS.max_seq_len, 
+                            max_word_num = FLAGS.max_sent_len, 
+                            max_char_num = FLAGS.max_char_num, 
+                            hidden_dim = FLAGS.hidden_dim, 
+                            embedding_dim = FLAGS.embedding_dim,
+                            class_num = FLAGS.class_num
+                    )
 
     # rl model
-    rl_model = mm.CM_model(FLAGS.action_num)
-    rl_global_step = tf.Variable(0, name="global_step", trainable=False)
-    rl_train_op = tf.train.AdamOptimizer(0.001).minimize(rl_model.rl_cost, rl_global_step)
-    
+    cm_model = model.CM_Model(
+                        max_word_num = FLAGS.max_sent_len, 
+                        embedding_dim = FLAGS.embedding_dim, 
+                        hidden_dim = FLAGS.hidden_dim, 
+                        action_num = FLAGS.action_num
+                )
+    cm_train_graph = model.InferCMTrainGraph(
+                            w2v, s_model, rdm_model, cm_model, 
+                            max_word_num = FLAGS.max_sent_len, 
+                            embedding_dim = FLAGS.embedding_dim, 
+                            hidden_dim = FLAGS.hidden_dim, 
+                            action_num = FLAGS.action_num
+                        )
+
     saver = tf.train.Saver(tf.global_variables(), max_to_keep=4)
     sess = tf.Session()
     with sess.as_default():
         sess.run(tf.global_variables_initializer())
 
-    summary_writer = tf.summary.FileWriter(FLAGS.train_dir, graph=session.graph)
+    summary_writer = tf.summary.FileWriter(FLAGS.train_dir, graph=sess.graph)
 
     ckpt_dir = FLAGS.train_dir
     checkpoint = tf.train.get_checkpoint_state(ckpt_dir)
@@ -249,10 +266,21 @@ if __name__ == "__main__":
         print(checkpoint.model_checkpoint_path+" is restored.")
         logger.info(checkpoint.model_checkpoint_path+" is restored.")
     else:
-        Train_Char_Model(sess, char_model, train_reader, saver, summary_writer)
+        lstm_char_cnn.Train_Char_Model(sess, char_train_graph, train_reader, saver, summary_writer)
         print("df_model "+" saved")
         logger.info("df_model "+" saved")
 
+    ckpt_dir = "senti_saved"
+    checkpoint = tf.train.get_checkpoint_state(ckpt_dir)
+    if checkpoint and checkpoint.model_checkpoint_path:
+        saver.restore(sess, checkpoint.model_checkpoint_path)
+        print(checkpoint.model_checkpoint_path+" is restored.")
+        logger.info(checkpoint.model_checkpoint_path+" is restored.")
+    else:
+        model.TrainSentiModel(sess, saver, logger, senti_train_graph, FLAGS.batch_size, FLAGS.batch_size)
+        saver.save(sess, "df_saved/model")
+        print("df_model "+" saved")
+        logger.info("df_model "+" saved")
 
     ckpt_dir = "df_saved"
     checkpoint = tf.train.get_checkpoint_state(ckpt_dir)
@@ -261,18 +289,18 @@ if __name__ == "__main__":
         print(checkpoint.model_checkpoint_path+" is restored.")
         logger.info(checkpoint.model_checkpoint_path+" is restored.")
     else:
-        df_train(sess, char_model, df_model, 0.80, 20)
+        model.TrainRDMModel(sess, logger, rdm_train_graph, t_acc, t_steps, new_data_len=[])
         saver.save(sess, "df_saved/model")
         print("df_model "+" saved")
         logger.info("df_model "+" saved")
 
     for i in range(20):
-        rl_train(sess, df_model, rl_model, 0.5, 500)
+        model.TrainCMModel(sess, logger, rdm_train_graph, cm_train_graph, t_rw, t_steps)
         saver.save(sess, "rl_saved/model"+str(i))
         print("rl_model "+str(i)+" saved")
         logger.info("rl_model "+str(i)+" saved")
         new_len = get_new_len(sess, rl_model)
-        acc = df_train(sess, df_model, 0.9, 1000, new_len)
+        model.TrainRDMModel(sess, logger, rdm_train_graph, t_acc, t_steps, new_data_len=[])
         saver.save(sess, "df_saved/model"+str(i))
         print("df_model "+str(i)+" saved")
         logger.info("df_model "+str(i)+" saved")

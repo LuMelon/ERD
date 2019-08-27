@@ -3,6 +3,17 @@ from __future__ import division
 
 
 import tensorflow as tf
+import time
+import numpy as np
+from config import *
+
+class adict(dict):
+    ''' Attribute dictionary - a convenience data structure, similar to SimpleNamespace in python 3.3
+        One can use attributes to read/write dictionary content.
+    '''
+    def __init__(self, *av, **kav):
+        dict.__init__(self, *av, **kav)
+        self.__dict__ = self
 
 
 def linear(input_, output_size, scope=None):
@@ -37,14 +48,16 @@ def linear(input_, output_size, scope=None):
 
 
 class WordEmbedding:
-    def __init__(self, max_word_length, char_vocab_size, char_embed_size, kernels, kernel_features, num_highway_layers):
-#             self.input_ = tf.placeholder(tf.int32, [None, max_word_length, char_vocab_size],name="W2V_input")
+    def __init__(self, max_word_length, char_vocab_size, 
+                        char_embed_size, kernels, kernel_features,
+                            num_highway_layers, embedding_dim):
         self.max_word_length = max_word_length
         self.char_vocab_size = char_vocab_size
         self.char_embed_size = char_embed_size
         self.kernels = kernels
         self.kernel_features = kernel_features
         self.num_highway_layers = num_highway_layers
+        self.embedding_dim = embedding_dim
         with tf.variable_scope('Embedding', reuse=tf.AUTO_REUSE):
             self.char_embedding = tf.get_variable('char_embedding', [self.char_vocab_size, self.char_embed_size])
             ''' this op clears embedding vector of first symbol (symbol at position 0, which is by convention the position
@@ -55,17 +68,23 @@ class WordEmbedding:
             self.clear_char_embedding_padding = tf.scatter_update(self.char_embedding, [0], tf.constant(0.0, shape=[1, self.char_embed_size]))
             
     def __call__(self, input_words):
+        #
         input_ = input_words
+        print("input_:", input_)
         with tf.variable_scope('Embedding', reuse=tf.AUTO_REUSE):
             # [batch_size x max_word_length, num_unroll_steps, char_embed_size]
             input_embedded = tf.nn.embedding_lookup(self.char_embedding, input_)
             input_embedded = tf.reshape(input_embedded, [-1, self.max_word_length, self.char_embed_size])
-        input_cnn = self.tdnn(input_embedded, self.kernels, self.kernel_features)
-        ''' Maybe apply Highway '''
-#             if num_highway_layers > 0:
-        assert self.num_highway_layers > 0
-        input_cnn = self.highway(input_cnn, input_cnn.get_shape()[-1], num_layers=self.num_highway_layers, scope="CNN_OUT")
-        return input_cnn
+            input_cnn = self.tdnn(input_embedded, self.kernels, self.kernel_features)
+            ''' Maybe apply Highway '''
+    #             if num_highway_layers > 0:
+            assert self.num_highway_layers > 0
+            input_cnn = self.highway(input_cnn, input_cnn.get_shape()[-1], num_layers=self.num_highway_layers, scope="CNN_OUT")
+            fcn_layer = tf.layers.Dense(self.embedding_dim, activation=tf.keras.activations.sigmoid, trainable=True)
+            final_embedding = fcn_layer(input_cnn) # [None, max_word_num, hidden_dim]
+        print("input_cnn:", input_cnn)
+        print("final_embedding", final_embedding)
+        return final_embedding
     
     def conv2d(self, input_, output_dim, k_h, k_w, name="conv2d"):
         with tf.variable_scope(name, reuse=tf.AUTO_REUSE):
@@ -87,12 +106,11 @@ class WordEmbedding:
 
                 output = t * g + (1. - t) * input_
                 input_ = output
-        print(output)
         return output
 
     def tdnn(self, input_, kernels, kernel_features, scope='TDNN'):
         '''
-        :input:           input float tensor of shape [(batch_size*num_unroll_steps) x max_word_length x embed_size]
+        :input:           input float tensor of shape [(batch_size*num_unroll_steps), max_word_length, embed_size]
         :kernels:         array of kernel sizes
         :kernel_features: array of kernel feature sizes (parallel to kernels)
         '''
@@ -118,17 +136,17 @@ class WordEmbedding:
 
 
 class LSTM_LM:
-    def __init__(self, batch_size, num_unroll_steps, input_dim, rnn_size, num_rnn_layers, word_vocab_size, dropout):
+    def __init__(self, batch_size, num_unroll_steps, rnn_size, num_rnn_layers, word_vocab_size):
         self.batch_size = batch_size
         self.num_unroll_steps = num_unroll_steps
-        self.input_dim = input_dim
         self.rnn_size = rnn_size
         self.num_rnn_layers = num_rnn_layers
         self.word_vocab_size = word_vocab_size
         with tf.variable_scope('LSTM', reuse=tf.AUTO_REUSE):
+            self.drop_out = tf.placeholder(tf.float32, name="Dropout")
             def create_rnn_cell():
                 cell = tf.contrib.rnn.BasicLSTMCell(rnn_size, state_is_tuple=True, forget_bias=0.0, reuse=False)
-                cell = tf.contrib.rnn.DropoutWrapper(cell, output_keep_prob=1.-dropout)
+                cell = tf.contrib.rnn.DropoutWrapper(cell, output_keep_prob=self.drop_out)
                 return cell
             if self.num_rnn_layers > 1:
                 self.cell = tf.contrib.rnn.MultiRNNCell([create_rnn_cell() for _ in range(self.num_rnn_layers)], state_is_tuple=True)
@@ -182,6 +200,7 @@ def infer_train_model(word2vec, LM,
         
     return adict(
         input = input_,
+        drop_out = LM.drop_out,
         clear_char_embedding_padding=word2vec.clear_char_embedding_padding,
         initial_rnn_state=LM.initial_rnn_state,
         final_rnn_state=final_rnn_state,
@@ -200,6 +219,7 @@ def Train_Char_Model(session, train_model, train_reader, saver, summary_writer):
     best_valid_loss = None
     rnn_state = session.run(train_model.initial_rnn_state)
     for epoch in range(FLAGS.max_epochs):
+    # for epoch in range(1):
         epoch_start_time = time.time()
         avg_train_loss = 0.0
         count = 0
@@ -217,6 +237,7 @@ def Train_Char_Model(session, train_model, train_reader, saver, summary_writer):
             ], {
                 train_model.input: x,
                 train_model.targets: y,
+                train_model.drop_out: 0.8,
                 train_model.initial_rnn_state: rnn_state
             })
 
@@ -237,6 +258,7 @@ def Train_Char_Model(session, train_model, train_reader, saver, summary_writer):
                                                         loss, np.exp(loss),
                                                         time_elapsed,
                                                         gradient_norm))
+    
         print('Epoch training time:', time.time()-epoch_start_time)
         save_as = '%s/epoch%03d_%.4f.model' % (FLAGS.train_dir, epoch, avg_train_loss)
         saver.save(session, save_as)
