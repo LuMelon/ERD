@@ -80,11 +80,11 @@ class WordEmbedding:
     #             if num_highway_layers > 0:
             assert self.num_highway_layers > 0
             input_cnn = self.highway(input_cnn, input_cnn.get_shape()[-1], num_layers=self.num_highway_layers, scope="CNN_OUT")
-            fcn_layer = tf.layers.Dense(self.embedding_dim, activation=tf.keras.activations.sigmoid, trainable=True)
-            final_embedding = fcn_layer(input_cnn) # [None, max_word_num, hidden_dim]
+            # fcn_layer = tf.layers.Dense(self.embedding_dim, activation=tf.keras.activations.sigmoid, trainable=True)
+            # final_embedding = fcn_layer(input_cnn) # [None, max_word_num, hidden_dim]
         print("input_cnn:", input_cnn)
-        print("final_embedding", final_embedding)
-        return final_embedding
+        # print("final_embedding", input_cnn)
+        return input_cnn
     
     def conv2d(self, input_, output_dim, k_h, k_w, name="conv2d"):
         with tf.variable_scope(name, reuse=tf.AUTO_REUSE):
@@ -158,15 +158,8 @@ class LSTM_LM:
         with tf.variable_scope('LSTM', reuse=tf.AUTO_REUSE):
             input_cnn2 = [tf.squeeze(x, [1]) for x in tf.split(input_cnn, self.num_unroll_steps, 1)]
             outputs, final_rnn_state = tf.contrib.rnn.static_rnn(self.cell, input_cnn2,
-                                             initial_state=self.initial_rnn_state, dtype=tf.float32)
-            # linear projection onto output (word) vocab
-            logits = []
-            with tf.variable_scope('WordEmbedding') as scope:
-                for idx, output in enumerate(outputs):
-                    if idx > 0:
-                        scope.reuse_variables()
-                    logits.append(linear(output, self.word_vocab_size))
-            return logits, outputs, final_rnn_state
+                                             initial_state=self.initial_rnn_state, dtype=tf.float32)     
+            return outputs, final_rnn_state
         
 
 def infer_train_model(word2vec, LM, 
@@ -182,8 +175,19 @@ def infer_train_model(word2vec, LM,
     
     input_cnn = word2vec(input_) #[batch_size*num_unroll_steps, k_features]
     input_cnn = tf.reshape(input_cnn, [batch_size, num_unroll_steps, -1])
-    logits, outputs, final_rnn_state = LM(input_cnn)
+    outputs, final_rnn_state = LM(input_cnn)
     
+    # linear projection onto output (word) vocab
+    logits = []
+    with tf.variable_scope('WordEmbedding') as scope:
+        for idx, output in enumerate(outputs):
+            if idx > 0:
+                scope.reuse_variables()
+            logits.append(linear(output, LM.word_vocab_size))
+
+    word_embedding = tf.identity(outputs, "lstm_word_embedding")
+    sent_embedding = tf.identity(final_rnn_state[-1][-1], "lstm_sent_embedding")
+
     with tf.variable_scope('Loss', reuse=tf.AUTO_REUSE):
             target_list = [tf.squeeze(x, [1]) for x in tf.split(targets, num_unroll_steps, 1)]
             loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(logits = logits, labels = target_list), name='loss')

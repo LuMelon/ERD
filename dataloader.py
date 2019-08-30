@@ -88,7 +88,10 @@ class SentiDataLoader:
                                 max([max(len(word) for word in sent) for sent in self.train_data])
                                )
 
-    def GetTrainingBatch(self, batchId, batchsize, max_word_num = 31, max_char_num = 21):
+    def GetTrainingBatch(self, batchId, batchsize, max_word_num = -1, max_char_num = 21):
+        if max_word_num == -1:
+            max_word_num = self.max_sent_len
+            
         def padding_sequence(max_len, sentence):
             placeholder = np.zeros([max_word_num, max_char_num], np.int32)
             rst = keras.preprocessing.sequence.pad_sequences(
@@ -113,7 +116,7 @@ class SentiDataLoader:
             data_y[i][ int(self.train_label[ids[i]]/2) ] = 1
         return data_x, data_y
     
-    def GetTestData(self, batchId, batchsize, max_char_num):
+    def GetTestData(self, batchId, batchsize, max_char_num=21):
         def padding_sequence(max_len, sentence):
             placeholder = np.zeros([max_word_num, max_char_num], np.int32)
             rst = keras.preprocessing.sequence.pad_sequences(

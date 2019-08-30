@@ -137,12 +137,15 @@ class SentiModel:
             # pooled_feat = tf.reshape(pooled_feat, [-1, self.num_filters])
         return pooled_feat 
 
-def InferSentiTrainGraph(char_model, senti_model, max_word_num, max_char_num, embedding_dim, hidden_dim, sent_num):
+def InferSentiTrainGraph(char_model, lm, senti_model, max_word_num, max_char_num, embedding_dim, hidden_dim, sent_num):
     sent_x = tf.placeholder(tf.int32, shape = [None, max_word_num, max_char_num])
     sent_y = tf.placeholder(tf.float32, shape = [None, sent_num])
     words2vec = char_model(sent_x) #[None, max_word_num, kernerl_size]
-    sentence = tf.reshape(words2vec, [-1, max_word_num, embedding_dim])
-    senti_features = senti_model(sentence)
+    cnn_outs = tf.reshape(words2vec, [-1, max_word_num, sum(char_model.kernel_features)])
+    words_embedding, sentence_embedding = lm(cnn_outs)
+    words_embedding = tf.identity(words_embedding, "rnn_out_puts")
+    words_embedding = tf.transpose(words_embedding, [1, 0, 2])
+    senti_features = senti_model(words_embedding)
     classifier = tf.layers.Dense(sent_num, activation=tf.nn.relu, trainable=True)
     senti_rst = classifier(senti_features)
     sent_scores = tf.nn.softmax(senti_rst, axis=1)
@@ -174,7 +177,7 @@ def InferSentiTrainGraph(char_model, senti_model, max_word_num, max_char_num, em
             )
 
 
-def InferRDMTrainGraph(char_model, senti_model, rdm_model, 
+def InferRDMTrainGraph(char_model, lm, senti_model, rdm_model, 
                             max_seq_len, max_word_num, max_char_num, 
                                 hidden_dim, embedding_dim, class_num):
     input_x = tf.placeholder(tf.int32, shape = [None, max_seq_len, max_word_num, max_char_num], name="input_x")
@@ -182,9 +185,17 @@ def InferRDMTrainGraph(char_model, senti_model, rdm_model,
     x_len = tf.placeholder(tf.int32, [None], name="x_len")
     init_states = tf.placeholder(tf.float32, [None, hidden_dim], name="init_states")
     x_reshape = tf.reshape(input_x, [-1, max_word_num, max_char_num])
+    print("x_reshape:", x_reshape)
     x_embedding = char_model(x_reshape)
-    sentence = tf.reshape(x_embedding, [-1, max_word_num, embedding_dim])
-    x_senti = senti_model(sentence)
+    print("x_embedding:", x_embedding)
+    cnn_outs = tf.reshape(x_embedding, [-1, 20, max_word_num, sum(char_model.kernel_features)])
+    print("cnn_outs:", cnn_outs)
+    words_embedding, sentence_embedding = lm(cnn_outs)
+    words_embedding = tf.identity(words_embedding, "rnn_out_puts")
+    words_embedding = tf.transpose(words_embedding, [1, 0, 2])
+    print("RDM words_embedding:", words_embedding)
+    x_senti = senti_model(words_embedding)
+    print("x_senti:", x_senti)
     RDM_Input = tf.reshape(x_senti, [-1, max_seq_len, hidden_dim])  
 
     with tf.variable_scope("Train_RDM", reuse=tf.AUTO_REUSE):

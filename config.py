@@ -30,7 +30,7 @@ tf.flags.DEFINE_string('train_dir',   'cv',     'training directory (models and 
 tf.flags.DEFINE_string('load_model',   None,    '(optional) filename of the model to load. Useful for re-starting training from a checkpoint')
 
 # model params
-tf.flags.DEFINE_integer('rnn_size',        650,                            'size of LSTM internal state')
+# tf.flags.DEFINE_integer('rnn_size',        650,                            'size of LSTM internal state')
 tf.flags.DEFINE_integer('highway_layers',  2,                              'number of highway layers')
 tf.flags.DEFINE_integer('char_embed_size', 15,                             'dimensionality of character embeddings')
 tf.flags.DEFINE_string ('kernels',         '[1,2,3,4,5,6,7]',              'CNN kernel widths')
@@ -43,7 +43,7 @@ tf.flags.DEFINE_float  ('learning_rate_decay', 0.5,  'learning rate decay')
 tf.flags.DEFINE_float  ('learning_rate',       1.0,  'starting learning rate')
 tf.flags.DEFINE_float  ('decay_when',          1.0,  'decay if validation perplexity does not improve by more than this much')
 tf.flags.DEFINE_float  ('param_init',          0.05, 'initialize parameters at')
-tf.flags.DEFINE_integer('num_unroll_steps',    35,   'number of timesteps to unroll for')
+# tf.flags.DEFINE_integer('num_unroll_steps',    35,   'number of timesteps to unroll for')
 # flags.DEFINE_integer('batch_size',          20,   'number of sequences to train on in parallel')
 tf.flags.DEFINE_integer('max_epochs',          25,   'number of full passes through the training data')
 tf.flags.DEFINE_float  ('max_grad_norm',       5.0,  'normalize gradients at')
