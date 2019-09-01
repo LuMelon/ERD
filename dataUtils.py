@@ -118,8 +118,8 @@ def Word2IDs(word):
     for i in range(len(rst)):
         if rst[i] is None:
             rst[i] = 0
-            print("Unknown char:", word[i])
-            print("Word:", word)
+            # print("Unknown char:", word[i])
+            # print("Word:", word)
     return rst
 
 
@@ -203,20 +203,20 @@ def load_data(data_path):
     eval_flag = int(len(data_ID) / 4) * 3
     print("{} data loaded".format(len(data)))
 
-def get_df_batch(start, new_data_len=[]):
-    data_x = np.zeros([FLAGS.batch_size, FLAGS.max_seq_len, FLAGS.max_sent_len, FLAGS.max_char_num], 
+def get_df_batch(start, batchsize, new_data_len=[]):
+    data_x = np.zeros([batchsize, FLAGS.max_seq_len, FLAGS.max_sent_len, FLAGS.max_char_num], 
                       dtype=np.int32)
-    m_data_y = np.zeros([FLAGS.batch_size, 2], dtype=np.int32)
-    m_data_len = np.zeros([FLAGS.batch_size], dtype=np.int32)
+    m_data_y = np.zeros([batchsize, 2], dtype=np.int32)
+    m_data_len = np.zeros([batchsize], dtype=np.int32)
     if len(new_data_len) > 0:
         t_data_len = new_data_len
     else:
         t_data_len = data_len
-    mts = start * FLAGS.batch_size
+    mts = start * batchsize
     if mts >= len(data_ID):
         mts = mts % len(data_ID)
     
-    for i in range(FLAGS.batch_size):
+    for i in range(batchsize):
         m_data_y[i] = data_y[mts]
         m_data_len[i] = t_data_len[mts]
         for j in range(t_data_len[mts]):
