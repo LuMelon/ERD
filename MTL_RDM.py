@@ -21,7 +21,7 @@ import dataloader
 tf.logging.set_verbosity(tf.logging.ERROR)
 
 
-logger = MyLogger("RDMTrain")
+logger = MyLogger("RDMGPUTrain")
 
 # load twitter data
 # load_data(FLAGS.data_file_path)
@@ -34,22 +34,6 @@ word_vocab, char_vocab, word_tensors, char_tensors =     PTB_data_reader.load_da
 max_word_length = FLAGS.max_word_length
 train_reader = PTB_data_reader.DataReader(word_tensors['train'], char_tensors['train'],
                           FLAGS.batch_size, FLAGS.max_sent_len) 
-
-#load sentiment analysis data
-sentiReader = dataloader.SentiDataLoader(
-                                        dirpath = '/home/hadoop/trainingandtestdata',
-                                        trainfile = 'training.1600000.processed.noemoticon.csv', 
-                                        testfile = 'testdata.manual.2009.06.14.csv', 
-                                        charVocab = char_vocab
-                        )
-# sentiReader.load_data()
-sentiReader.load_data_fast(
-                        '/home/hadoop/ERD/data/senti_train_data.pickle',
-                        '/home/hadoop/ERD/data/senti_train_label.pickle',
-                        '/home/hadoop/ERD/data/senti_test_data.pickle',
-                        '/home/hadoop/ERD/data/senti_test_label.pickle'
-                          )
-
 
 # (self, input_dim, hidden_dim, max_seq_len, max_word_num, class_num, action_num):
 print(  FLAGS.embedding_dim, FLAGS.hidden_dim, 
@@ -340,7 +324,7 @@ with tf.Graph().as_default() as g:
                 )
             rdm_train_graph = InferRDMTrainGraph(
                             w2v, lstm_lm, None, rdm_model, 
-                            batchsize=5,
+                            batchsize=20,
                             max_seq_len = FLAGS.max_seq_len, 
                             max_word_num = FLAGS.max_sent_len, 
                             max_char_num = FLAGS.max_char_num, 
@@ -351,7 +335,7 @@ with tf.Graph().as_default() as g:
             val_list2 = tf.global_variables()
             rdm_vars = list( filter(lambda var: var not in val_list1, val_list2) )
             df_global_step = tf.Variable(0, name="global_step", trainable=False)
-            df_train_op = tf.train.AdamOptimizer(0.01).minimize(rdm_train_graph.loss, df_global_step, var_list = rdm_vars)
+            df_train_op = tf.train.AdagradOptimizer(0.05).minimize(rdm_train_graph.loss, df_global_step, var_list = rdm_vars)
             rdm_train_graph.update(
                 adict(
                     df_global_step = df_global_step,
@@ -364,8 +348,8 @@ with tf.Graph().as_default() as g:
 #             print("uninitialized_vars:", uninitialized_vars)
             sess.run(tf.variables_initializer(uninitialized_vars))
             sess.run(tf.global_variables_initializer())
-        summary_writer = tf.summary.FileWriter("RDMGPUTrain/", graph=sess.graph)
-        TrainRDMModel(sess, saver, summary_writer, logger, rdm_train_graph, 5, 0.97, 100000, "RDMGPUTrain/", new_data_len=[])
+        summary_writer = tf.summary.FileWriter("RDMCPUTrain/", graph=sess.graph)
+        TrainRDMModel(sess, saver, summary_writer, logger, rdm_train_graph, 20, 0.97, 100000, "RDMCPUTrain/", new_data_len=[])
 
 
 # In[ ]:
