@@ -82,6 +82,24 @@ logger.info(get_curtime() + " Data loaded.")
 from model import adict
 
 
+def shared_pooling_layer(inputs, input_dim, max_seq_len, max_word_len, output_dim, scope="shared_pooling_layer"):
+    with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
+        t_inputs = tf.reshape(inputs, [-1, input_dim])
+        mix_layer = tf.layers.Dense(output_dim)
+        t_h = mix_layer(t_inputs)
+        t_h = tf.reshape(t_h, [-1, max_word_len, output_dim])
+        t_h_expended = tf.expand_dims(t_h, -1)
+        pooled = tf.nn.max_pool(
+            t_h_expended,
+            ksize=[1, max_word_len, 1, 1],
+            strides=[1, 1, 1, 1],
+            padding="VALID",
+            name="max_pool"
+        )
+    outs = tf.reshape(pooled, [-1, max_seq_len, output_dim])
+    return outs
+
+
 def InferRDMTrainGraph(char_model, lm, senti_model, rdm_model, batchsize,
                             max_seq_len, max_word_num, max_char_num, 
                                 hidden_dim, embedding_dim, class_num):
@@ -144,16 +162,30 @@ def InferRDMTrainGraph(char_model, lm, senti_model, rdm_model, batchsize,
                                         dtype=tf.float32
                                     )     
     words_embedding = tf.identity(words_embedding, 
-                                    "rnn_out_puts")
+                                    "rnn_out_puts") #[max_word_num, batchsize*max_seq_len, embedding_dim]
     words_embedding = tf.transpose(words_embedding, 
-                                        [1, 0, 2])
+                                        [1, 0, 2]) #[batchsize*max_seq_len, max_word_num, embedding_dim]
+    words_embedding = tf.reshape(words_embedding, 
+                                 shape=[
+                                  batchsize,
+                                  max_seq_len,
+                                  max_word_num,
+                                  embedding_dim
+                                 ]
+                                )
     print("RDM words_embedding:", words_embedding)
 #     x_senti = senti_model(words_embedding)
-    words_feature = tf.math.reduce_max( words_embedding , axis=1)
+#     words_feature = tf.math.reduce_max( words_embedding , axis=1)
     
     with tf.variable_scope("Train_RDM", reuse=tf.AUTO_REUSE):
-        fcn_layer = tf.layers.Dense(hidden_dim, activation=tf.compat.v1.keras.activations.sigmoid)
-        x_senti =  fcn_layer(sentence_embedding[-1][-1] + words_feature )
+#         fcn_layer = tf.layers.Dense(hidden_dim, activation=tf.compat.v1.keras.activations.sigmoid)
+#         x_senti =  fcn_layer(sentence_embedding[-1][-1] + words_feature )
+        x_senti = shared_pooling_layer(inputs = words_embedding, 
+                                       input_dim = embedding_dim, 
+                                       max_seq_len = max_seq_len, 
+                                       max_word_len = max_word_num, 
+                                       output_dim = hidden_dim 
+                                      )
         print("x_senti:", x_senti)
         RDM_Input = tf.reshape(
                             x_senti, 
@@ -335,6 +367,7 @@ with tf.Graph().as_default() as g:
             val_list2 = tf.global_variables()
             rdm_vars = list( filter(lambda var: var not in val_list1, val_list2) )
             df_global_step = tf.Variable(0, name="global_step", trainable=False)
+#             df_train_op = tf.train.MomentumOptimizer(0.05, 0.9).minimize(rdm_train_graph.loss, df_global_step, var_list = rdm_vars)
             df_train_op = tf.train.AdagradOptimizer(0.05).minimize(rdm_train_graph.loss, df_global_step, var_list = rdm_vars)
             rdm_train_graph.update(
                 adict(
@@ -348,8 +381,8 @@ with tf.Graph().as_default() as g:
 #             print("uninitialized_vars:", uninitialized_vars)
             sess.run(tf.variables_initializer(uninitialized_vars))
             sess.run(tf.global_variables_initializer())
-        summary_writer = tf.summary.FileWriter("RDMCPUTrain/", graph=sess.graph)
-        TrainRDMModel(sess, saver, summary_writer, logger, rdm_train_graph, 20, 0.97, 100000, "RDMCPUTrain/", new_data_len=[])
+        summary_writer = tf.summary.FileWriter("RDMGPUTrain/", graph=sess.graph)
+        TrainRDMModel(sess, saver, summary_writer, logger, rdm_train_graph, 20, 0.97, 100000, "RDMGPUTrain/", new_data_len=[])
 
 
 # In[ ]:
