@@ -45,6 +45,54 @@ def linear(input_, output_size, scope=None):
     return tf.matmul(input_, tf.transpose(matrix)) + bias_term
 
 
+class LSTMCharNet:
+    def __init__(self, max_word_length, char_vocab_size, 
+                        char_embed_size, embedding_dim):
+        self.max_word_length = max_word_length
+        self.char_vocab_size = char_vocab_size
+        self.char_embed_size = char_embed_size
+        self.embedding_dim = embedding_dim
+        with tf.variable_scope('Embedding', reuse=tf.AUTO_REUSE):
+            self.char_embedding = tf.get_variable('char_embedding', [self.char_vocab_size, self.char_embed_size])
+            ''' this op clears embedding vector of first symbol (symbol at position 0, which is by convention the position
+            of the padding symbol). It can be used to mimic Torch7 embedding operator that keeps padding mapped to
+            zero embedding vector and ignores gradient updates. For that do the following in TF:
+            1. after parameter initialization, apply this op to zero out padding embedding vector
+            2. after each gradient update, apply this op to keep padding at zero'''
+            self.clear_char_embedding_padding = tf.scatter_update(self.char_embedding, [0], tf.constant(0.0, shape=[1, self.char_embed_size]))
+            self.drop_out_prob_keep = tf.placeholder(tf.float32, name="lstm_char_net_dp")
+            self.fw_cell = self.create_rnn_cell(self.embedding_dim)
+            self.bw_cell = self.create_rnn_cell(self.embedding_dim)
+
+    def __call__(self, input_words, x_len, fw_init, bw_init):
+        input_ = input_words
+        print("input_:", input_)
+        with tf.variable_scope('Embedding', reuse=tf.AUTO_REUSE):
+            input_embedded = tf.nn.embedding_lookup(self.char_embedding, input_)
+            print("input_embedded1:", input_embedded)
+            input_embedded = tf.reshape(input_embedded, [-1, self.max_word_length, self.char_embed_size])
+            print("input_embedded2:", input_embedded)
+            (fw_outs, bw_outs), (fw_final, bw_final) = tf.nn.bidirectional_dynamic_rnn(
+                                        self.fw_cell,
+                                        self.bw_cell,
+                                        input_embedded,
+                                        sequence_length=x_len,
+                                        initial_state_fw=fw_init,
+                                        initial_state_bw=bw_init,
+                                        dtype=None,
+                                        parallel_iterations=None,
+                                        swap_memory=False,
+                                        time_major=False,
+                                        scope=None
+                                    )
+        return fw_outs, bw_outs, fw_final, bw_final
+
+    def create_rnn_cell(self, rnn_size):
+        cell = tf.contrib.rnn.BasicLSTMCell(rnn_size, state_is_tuple=True, forget_bias=0.0, reuse=False)
+        cell = tf.contrib.rnn.DropoutWrapper(cell, output_keep_prob=self.drop_out_prob_keep)
+        return cell
+
+
 
 
 class WordEmbedding:
@@ -162,18 +210,22 @@ class LSTM_LM:
             return outputs, final_rnn_state
         
 
-def infer_train_model(word2vec, LM, 
+def infer_train_model(char_rnn_net, LM, 
                       batch_size, 
                       num_unroll_steps, 
                       max_word_length, 
                       learning_rate,
                       max_grad_norm
                      ):
-    drop_out = tf.placeholder(tf.float32)
     input_ = tf.placeholder(tf.int32, shape=[batch_size, num_unroll_steps, max_word_length], name="input")
     targets = tf.placeholder(tf.int64, [batch_size, num_unroll_steps], name='targets')
-    
-    input_cnn = word2vec(input_) #[batch_size*num_unroll_steps, k_features]
+    input_len = tf.placeholder(tf.int32, shape = [batch_size*num_unroll_steps]) 
+
+    # input_cnn = word2vec(input_) #[batch_size*num_unroll_steps, k_features]
+    fw_init = char_rnn_net.fw_cell.zero_state(batch_size, dtype=tf.float32)
+    bw_init = char_rnn_net.bw_cell.zero_state(batch_size, dtype=tf.float32)
+    fw_outs, bw_outs, fw_final, bw_final = char_rnn_net(input_, input_len, fw_init, bw_init)
+
     input_cnn = tf.reshape(input_cnn, [batch_size, num_unroll_steps, -1])
     outputs, final_rnn_state = LM(input_cnn)
     

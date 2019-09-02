@@ -64,7 +64,10 @@ def load_data_fast():
     with open('data/word_vocab.txt', 'rb') as handle:
         word_vocab = pickle.load(handle)
 
-    return word_vocab, char_vocab, word_tensors, char_tensors
+    with open('data/word_len.txt', 'rb') as handle:
+        x_len = pickle.load(handle)
+
+    return word_vocab, char_vocab, word_tensors, char_tensors, x_len
     
 
 
@@ -124,21 +127,23 @@ def load_data(data_dir, max_word_length, char_vocab, idx2char=None, char2idx=Non
     # now we know the sizes, create tensors
     word_tensors = {}
     char_tensors = {}
+    x_len = {}
     for fname in ('train', 'valid', 'test'):
         assert len(char_tokens[fname]) == len(word_tokens[fname])
-
         word_tensors[fname] = np.array(word_tokens[fname], dtype=np.int32)
         char_tensors[fname] = np.zeros([len(char_tokens[fname]), actual_max_word_length], dtype=np.int32)
+        x_len[fname] = np.zeros([len(char_tokens[fname])], dtype=np.int32)
 
         for i, char_array in enumerate(char_tokens[fname]):
             char_tensors[fname] [i,:len(char_array)] = char_array
+            x_len[fname][i] = len(char_array)
 
-    return word_vocab, char_vocab, word_tensors, char_tensors, actual_max_word_length
+    return word_vocab, char_vocab, word_tensors, char_tensors, actual_max_word_length, x_len
 
 
 class DataReader:
 
-    def __init__(self, word_tensor, char_tensor, batch_size, num_unroll_steps):
+    def __init__(self, word_tensor, char_tensor, x_len, batch_size, num_unroll_steps):
 
         length = word_tensor.shape[0]
         assert char_tensor.shape[0] == length
@@ -149,6 +154,7 @@ class DataReader:
         reduced_length = (length // (batch_size * num_unroll_steps)) * batch_size * num_unroll_steps
         word_tensor = word_tensor[:reduced_length]
         char_tensor = char_tensor[:reduced_length, :]
+        x_len = x_len[:reduced_length]
 
         ydata = np.zeros_like(word_tensor)
         ydata[:-1] = word_tensor[1:].copy()
@@ -156,12 +162,15 @@ class DataReader:
 
         x_batches = char_tensor.reshape([batch_size, -1, num_unroll_steps, max_word_length])
         y_batches = ydata.reshape([batch_size, -1, num_unroll_steps])
+        l_batches = x_len.reshape([batch_size, -1, num_unroll_steps]) 
 
         x_batches = np.transpose(x_batches, axes=(1, 0, 2, 3))
         y_batches = np.transpose(y_batches, axes=(1, 0, 2))
+        l_batches = np.transpose(l_batches, axes=(1, 0, 2))
 
         self._x_batches = list(x_batches)
         self._y_batches = list(y_batches)
+        self._l_batches = list(l_batches)
         assert len(self._x_batches) == len(self._y_batches)
         self.length = len(self._y_batches)
         self.batch_size = batch_size
@@ -169,8 +178,8 @@ class DataReader:
 
     def iter(self):
 
-        for x, y in zip(self._x_batches, self._y_batches):
-            yield x, y
+        for x, y, l in zip(self._x_batches, self._y_batches, self._l_batches):
+            yield x, y, l
 
 
 if __name__ == '__main__':
