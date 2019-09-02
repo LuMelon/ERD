@@ -30,10 +30,10 @@ load_data_fast()
 #load PTB data
 # word_vocab, char_vocab, word_tensors, char_tensors, max_word_length = \
 #     PTB_data_reader.load_data(FLAGS.data_dir, FLAGS.max_word_length, char_vocab, eos=FLAGS.EOS)
-word_vocab, char_vocab, word_tensors, char_tensors =     PTB_data_reader.load_data_fast()
+word_vocab, char_vocab, word_tensors, char_tensors, word_len =     PTB_data_reader.load_data_fast()
 max_word_length = FLAGS.max_word_length
-train_reader = PTB_data_reader.DataReader(word_tensors['train'], char_tensors['train'],
-                          FLAGS.batch_size, FLAGS.max_sent_len) 
+# train_reader = PTB_data_reader.DataReader(word_tensors['train'], char_tensors['train'],
+#                           FLAGS.batch_size, FLAGS.max_sent_len) 
 
 # (self, input_dim, hidden_dim, max_seq_len, max_word_num, class_num, action_num):
 print(  FLAGS.embedding_dim, FLAGS.hidden_dim, 

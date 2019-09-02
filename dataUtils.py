@@ -87,6 +87,7 @@ def data_process(file_path):
 def transIrregularWord(word):
     if not word:
         return ''
+    word = word.replace('}', '').replace('{', '').replace('|', '')
     pattern1 = "[^A-Za-z]*$" #punctuation at the end of sentence
     pattern2 = "^[^A-Za-z@#]*" #punctuation at the start of sentence
     word = re.sub(pattern2, "", re.sub(pattern1, "", word))
@@ -95,15 +96,15 @@ def transIrregularWord(word):
     if not word:
         return ''
     elif word.__contains__('@'):
-        return 'person'
+        return '{person}'
     elif word.__contains__('#'):
-        return 'topic'
+        return '{topic}'
     elif re.match(r'(.*)http?://(.*)', word, re.M|re.I|re.S):    
-        return 'links'
+        return '{links}'
     elif re.match(pattern4, word, re.M|re.I):
-        return 'number'
+        return '{number}'
     else:
-        return  word
+        return  '{' + word + '}'
 
 def sortTempList(temp_list):
     time = np.array([item[0] for item in temp_list])
