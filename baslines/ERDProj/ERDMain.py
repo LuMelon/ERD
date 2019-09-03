@@ -157,38 +157,42 @@ if __name__ == "__main__":
     load_data_fast()
     print(get_curtime() + " Data loaded.")
     logger.info(get_curtime() + " Data loaded.")
+    gpu_config = tf.ConfigProto(allow_soft_placement=True, log_device_placement=True)
     # (self, input_dim, hidden_dim, max_seq_len, max_word_len, class_num, action_num):
     print(FLAGS.embedding_dim, FLAGS.hidden_dim, FLAGS.max_seq_len, FLAGS.max_sent_len, FLAGS.class_num, FLAGS.action_num)
     logger.info((FLAGS.embedding_dim, FLAGS.hidden_dim, FLAGS.max_seq_len, FLAGS.max_sent_len, FLAGS.class_num, FLAGS.action_num))
-    mm = RL_GRU2(FLAGS.embedding_dim, FLAGS.hidden_dim, FLAGS.max_seq_len,
-                 FLAGS.max_sent_len, FLAGS.class_num, FLAGS.action_num, FLAGS.sent_num)
     
-    # df model
-    df_global_step = tf.Variable(0, name="global_step", trainable=False)
-    df_train_op = tf.train.AdagradOptimizer(0.05).minimize(mm.loss, df_global_step)
+    sess = tf.Session(config=gpu_config)
+    with  sess.as_default():
+        with tf.device('/GPU:0'):
+            mm = RL_GRU2(FLAGS.embedding_dim, FLAGS.hidden_dim, FLAGS.max_seq_len,
+                         FLAGS.max_sent_len, FLAGS.class_num, FLAGS.action_num, FLAGS.sent_num)
+            
+            # df model
+            df_global_step = tf.Variable(0, name="global_step", trainable=False)
+            df_train_op = tf.train.AdagradOptimizer(0.05).minimize(mm.loss, df_global_step)
 
-    # rl model
-    rl_global_step = tf.Variable(0, name="global_step", trainable=False)
-    rl_train_op = tf.train.AdamOptimizer(0.001).minimize(mm.rl_cost, rl_global_step)
-    
-    saver = tf.train.Saver(tf.global_variables(), max_to_keep=4)
-    sess = tf.Session()
-    with sess.as_default():
-        sess.run(tf.global_variables_initializer())
+            # rl model
+            rl_global_step = tf.Variable(0, name="global_step", trainable=False)
+            rl_train_op = tf.train.AdamOptimizer(0.001).minimize(mm.rl_cost, rl_global_step)
+            
+            saver = tf.train.Saver(tf.global_variables(), max_to_keep=4)
+            sess.run(tf.global_variables_initializer())
+
     summary_writer = tf.summary.FileWriter("./reports/", graph=sess.graph)
-
-    ckpt_dir = "df_saved_erd"
-    checkpoint = tf.train.get_checkpoint_state(ckpt_dir)
-    if checkpoint and checkpoint.model_checkpoint_path:
-        print("--------------Debug1------------------")
-        saver.restore(sess, checkpoint.model_checkpoint_path)
-        print(checkpoint.model_checkpoint_path+" is restored.")
-        logger.info(checkpoint.model_checkpoint_path+" is restored.")
-    else:
-        df_train(sess, summary_writer, mm, 0.80, 20000)
-        saver.save(sess, "df_saved_erd/model")
-        print("df_model "+" saved")
-        logger.info("df_model "+" saved")
+        # ckpt_dir = "df_saved_erd"
+        # checkpoint = tf.train.get_checkpoint_state(ckpt_dir)
+        # if checkpoint and checkpoint.model_checkpoint_path:
+        #     print("--------------Debug1------------------")
+        #     saver.restore(sess, checkpoint.model_checkpoint_path)
+        #     print(checkpoint.model_checkpoint_path+" is restored.")
+        #     logger.info(checkpoint.model_checkpoint_path+" is restored.")
+        # else:
+        #     df_train(sess, summary_writer, mm, 0.80, 20000)
+        #     saver.save(sess, "df_saved_erd/model")
+        #     print("df_model "+" saved")
+        #     logger.info("df_model "+" saved")
+    df_train(sess, summary_writer, mm, 0.90, 20000)
 
     for i in range(20):
         rl_train(sess, mm, 0.5, 50000)
@@ -196,7 +200,7 @@ if __name__ == "__main__":
         print("rl_model "+str(i)+" saved")
         logger.info("rl_model "+str(i)+" saved")
         new_len = get_new_len(sess, mm)
-        acc = df_train(sess, mm, 0.9, 1000, new_len)
+        acc = df_train(sess, summary_writer, mm, 0.9, 1000, new_len)
         saver.save(sess, "df_saved_erd/model"+str(i))
         print("df_model "+str(i)+" saved")
         logger.info("df_model "+str(i)+" saved")

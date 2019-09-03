@@ -17,8 +17,9 @@ data = {}
 data_ID = []
 data_len = []
 data_y = []
-# word2vec = gensim.models.KeyedVectors.load_word2vec_format('/home/hadoop/word2vec.model')
-c2vec = chars2vec.load_model('eng_300')
+word2vec = gensim.models.KeyedVectors.load_word2vec_format('/home/hadoop/word2vec.model')
+print("load glove finished")
+# c2vec = chars2vec.load_model('eng_300')
 reward_counter = 0
 eval_flag = 0
 
@@ -179,8 +180,8 @@ def get_df_batch(start, new_data_len=[]):
     data_x = np.zeros([FLAGS.batch_size, FLAGS.max_seq_len, FLAGS.max_sent_len, FLAGS.embedding_dim], dtype=np.float32)
     m_data_y = np.zeros([FLAGS.batch_size, 2], dtype=np.int32)
     m_data_len = np.zeros([FLAGS.batch_size], dtype=np.int32)
-    # miss_vec = 0
-    # hit_vec = 0
+    miss_vec = 0
+    hit_vec = 0
     if len(new_data_len) > 0:
         t_data_len = new_data_len
     else:
@@ -194,22 +195,22 @@ def get_df_batch(start, new_data_len=[]):
         m_data_len[i] = t_data_len[mts]
         for j in range(t_data_len[mts]):
             t_words = data[data_ID[mts]]['text'][j]
-            # for k in range(len(t_words)):
-            #     m_word = t_words[k]
-            #     try:
-            #         # data_x[i][j][k] = c2vec.vectorize_words([m_word])[0]
-            #         data_x[i][j][k] = word2vec[m_word]
-            #     except KeyError:
-            #         print("word:", m_word)
-            #         miss_vec += 1
-            #     except IndexError:
-            #         print("i, j, k:", FLAGS.batch_size, '|',t_data_len[mts] ,'|', len(t_words))
-            #         print("word:", m_word, "(", i, j, k, ")")
-            #         raise
-            #     else:
-            #         hit_vec += 1
-            if len(t_words) != 0:
-                data_x[i][j][:len(t_words)] = c2vec.vectorize_words(t_words)
+            for k in range(len(t_words)):
+                m_word = t_words[k]
+                try:
+                    # data_x[i][j][k] = c2vec.vectorize_words([m_word])[0]
+                    data_x[i][j][k] = word2vec[m_word]
+                except KeyError:
+                    # print("word:", m_word)
+                    miss_vec += 1
+                except IndexError:
+                    # print("i, j, k:", FLAGS.batch_size, '|',t_data_len[mts] ,'|', len(t_words))
+                    # print("word:", m_word, "(", i, j, k, ")")
+                    raise
+                else:
+                    hit_vec += 1
+            # if len(t_words) != 0:
+            #     data_x[i][j][:len(t_words)] = c2vec.vectorize_words(t_words)
         mts += 1
         if mts >= len(data_ID): # read data looply
             mts = mts % len(data_ID)
@@ -236,14 +237,14 @@ def get_rl_batch(ids, seq_states, stop_states, counter_id, start_id, total_data)
                 t_words = data[ data_ID[ids[i]] ]['text'][seq_states[i]]
             except:
                 print(ids[i], seq_states[i])
-            # for j in range(len(t_words)):
-            #     m_word = t_words[j]
-            #     try:
-            #         input_x[i][j] = word2vec[m_word]
-            #     except:
-            #         miss_vec = 1
-            if len(t_words) != 0:
-                input_x[i][:len(t_words)] = c2vec.vectorize_words(t_words)
+            for j in range(len(t_words)):
+                m_word = t_words[j]
+                try:
+                    input_x[i][j] = word2vec[m_word]
+                except:
+                    miss_vec = 1
+            # if len(t_words) != 0:
+            #     input_x[i][:len(t_words)] = c2vec.vectorize_words(t_words)
             input_y[i] = data_y[ids[i]]
             counter_id += 1
             counter_id = counter_id % total_data
@@ -253,14 +254,14 @@ def get_rl_batch(ids, seq_states, stop_states, counter_id, start_id, total_data)
             except:
                 print("ids and seq_states:", ids[i], seq_states[i])
                 t_words = []
-            # for j in range(len(t_words)):
-            #     m_word = t_words[j]
-            #     try:
-            #         input_x[i][j] = word2vec[m_word]
-            #     except:
-            #         miss_vec += 1
-            if len(t_words) != 0:
-                input_x[i][:len(t_words)] = c2vec.vectorize_words(t_words)
+            for j in range(len(t_words)):
+                m_word = t_words[j]
+                try:
+                    input_x[i][j] = word2vec[m_word]
+                except:
+                    miss_vec += 1
+            # if len(t_words) != 0:
+            #     input_x[i][:len(t_words)] = c2vec.vectorize_words(t_words)
             input_y[i] = data_y[ids[i]]
         # point to the next sequence
         seq_states[i] += 1
@@ -295,14 +296,14 @@ def get_new_len(sess, mm):
         for j in range(data_len[i]):
             t_words = data[data_ID[i]]['text'][j]
             e_x = np.zeros([1, FLAGS.max_sent_len, FLAGS.embedding_dim], dtype=np.float32)
-            # for k in range(len(t_words)):
-            #     m_word = t_words[k]
-            #     try:
-            #         e_x[0][k] = word2vec[m_word]
-            #     except:
-            #         miss_word = 1
-            if len(t_words) != 0:
-                e_x[0][:len(t_words)] = c2vec.vectorize_words(t_words)
+            for k in range(len(t_words)):
+                m_word = t_words[k]
+                try:
+                    e_x[0][k] = word2vec[m_word]
+                except:
+                    miss_word = 1
+            # if len(t_words) != 0:
+            #     e_x[0][:len(t_words)] = c2vec.vectorize_words(t_words)
             batch_dic = {mm.rl_state: e_state, mm.rl_input: e_x, mm.dropout_keep_prob: 1.0}
             e_isStop, mNewState = sess.run([mm.isStop, mm.rl_new_state], batch_dic)
             e_state = mNewState
