@@ -10,28 +10,24 @@ from torch import nn
 from SubjObjLoader import *
 import numpy as np
 import importlib
+from tensorboardX import SummaryWriter
+import torch.nn.utils.rnn as rnn_utils
 
 
 # In[2]:
-
-
-from tensorboardX import SummaryWriter
-
-
-# In[3]:
 
 
 b, t, c = BertModel,       BertTokenizer,      'bert-base-uncased'
 tt = t.from_pretrained("bert-base-uncased", cached_dir = "/home/hadoop/transformer_pretrained_models/bert-base-uncased-pytorch_model.bin")
 
 
-# In[4]:
+# In[3]:
 
 
 bb = b.from_pretrained("bert-base-uncased")
 
 
-# In[5]:
+# In[4]:
 
 
 subj_file = "/home/hadoop/rotten_imdb/subj.data"
@@ -39,15 +35,24 @@ obj_file = "/home/hadoop/rotten_imdb/obj.data"
 tr, dev, te = load_data(subj_file, obj_file)
 
 
-# In[7]:
+# In[5]:
 
 
-train_reader = SubjObjReader(tr, 100, tt)
-valid_reader = SubjObjReader(dev, 100, tt)
-test_reader =  SubjObjReader(te, 100, tt)
+train_reader = SubjObjReader(tr, 20, tt)
+valid_reader = SubjObjReader(dev, 20, tt)
+test_reader =  SubjObjReader(te, 20, tt)
 
 
-# In[8]:
+# In[6]:
+
+
+# for x, y, l in train_reader.iter():
+#     break
+
+# y
+
+
+# In[6]:
 
 
 class SentimentModel(nn.Module):
@@ -59,31 +64,63 @@ class SentimentModel(nn.Module):
     def __init__(   self,
                     bert ,
                     hidden_size,
+                    rnn_size, 
                     senti_num,
                     drop_out
                 ):
         super(SentimentModel, self).__init__()
         self.bert = bert
-        self.classifier = nn.Linear(hidden_size, senti_num)
+        self.gru = nn.GRU(hidden_size, rnn_size, 1, batch_first=True)
+        self.classifier = nn.Linear(rnn_size, senti_num)
+        
     def forward(self, word_ids):
         outs = [self.bert( torch.tensor([input_]).cuda() )
                 for input_ in word_ids]
-        cls_feature =torch.cat([item[0][0][0] + item[1][0] for item in outs], axis=0).reshape([-1, 768]).cuda()
+#         cls_feature =torch.cat([item[0][0][0] + item[1][0] for item in outs], axis=0).reshape([-1, 768]).cuda()
+        states = [item[0][0] for item in outs]
+        pad = rnn_utils.pad_sequence(states, batch_first=True)
+        h_outs, h_final = self.gru(pad)
+        cls_feature = h_final[0] + h_outs.max(axis=1)[0]
         pred_scores = self.classifier(cls_feature)
         return pred_scores, cls_feature
 
 
-# In[12]:
+# In[7]:
+
+
+def Count_Accs(ylabel, pred_scores):
+    correct_preds = np.array([1 if y1==y2 else 0 for (y1, y2) in zip(ylabel, pred_scores.argmax(axis=1))])
+    y_idxs = [idx if yl >0 else idx - len(ylabel) for (idx, yl) in enumerate(ylabel)]
+    pos_idxs = list(filter(lambda x: x > 0, y_idxs))
+    neg_idxs = list(filter(lambda x: x < 0, y_idxs))
+    acc = sum(correct_preds) / (1.0 * len(ylabel))
+    pos_acc = sum(correct_preds[pos_idxs])/(1.0*len(pos_idxs))
+    neg_acc = sum(correct_preds[neg_idxs])/(1.0*len(neg_idxs))
+    return acc, pos_acc, neg_acc
+
+
+# In[8]:
+
+
+def Loss_Fn(ylabel, pred_scores):
+    diff = (ylabel - pred_scores)*(ylabel - pred_scores)
+    return diff.mean()
+
+
+# In[11]:
 
 
 def Train(bert, train_reader, valid_reader, test_reader, hidden_dim, logger, logdir):
-    max_epoch = 100
-    loss_fn = nn.CrossEntropyLoss()
-    senti_model = SentimentModel(bert, hidden_dim, 2, 0.8).cuda()
-    optim = torch.optim.Adam([
-                                {'params': senti_model.bert.parameters(), 'lr':1e-2},
-                                {'params': senti_model.classifier.parameters(), 'lr': 1e-2}
-                             ]
+    max_epoch = 5
+    loss_fn = Loss_Fn
+    senti_model = SentimentModel(bert, hidden_dim, 300, 2, 0.8).cuda()
+    optim = torch.optim.Adagrad([
+#                                 {'params': senti_model.bert.parameters(), 'lr':1e-2},
+                                {'params': senti_model.classifier.parameters(), 'lr': 1e-1},
+                                {'params': senti_model.gru.parameters(), 'lr': 1e-1}
+                             ],
+                                weight_decay = 0.2
+            
     )
     writer = SummaryWriter(logdir)
     batches = train_reader.label.shape[0]
@@ -94,8 +131,13 @@ def Train(bert, train_reader, valid_reader, test_reader, hidden_dim, logger, log
         for x, y, l in  train_reader.iter():
             pred_scores, _ = senti_model(x)
             ylabel = y.argmax(axis=1)
-            acc = sum([1 if y1==y2 else 0 for (y1, y2) in zip(ylabel, pred_scores.argmax(axis=1))]) / (1.0 * len(ylabel))
-            loss = loss_fn(pred_scores, torch.tensor(ylabel).cuda())
+            acc, pos_acc, neg_acc = Count_Accs(ylabel, pred_scores)
+            print("step %d| pos_acc/neg_acc = %6.8f/%6.7f, pos_pred/all_pred = %2d/%2d"%(step, 
+                                                                                         pos_acc, neg_acc,
+                                                                                         sum(pred_scores.argmax(axis=1)),
+                                                                                         len(pred_scores)
+                                                                                        ))
+            loss = loss_fn(pred_scores, torch.tensor(y, dtype=torch.float32).cuda())
             optim.zero_grad()
             loss.backward()
             optim.step()
@@ -122,30 +164,32 @@ def Train(bert, train_reader, valid_reader, test_reader, hidden_dim, logger, log
                                                         ))
                 sum_acc = 0.0
                 sum_loss = 0.0
-        # if step%1000 == 0:
-        # for x, y, l in  valid_reader.iter():
-        #     pred_scores, _ = senti_model(x)
-        #     ylabel = y.argmax(axis=1)
-        #     acc = sum([1 if y1==y2 else 0 for (y1, y2) in zip(ylabel, pred_scores.argmax(axis=1))]) / (1.0 * len(ylabel))
-        #     loss = loss_fn(pred_scores, torch.tensor(ylabel).cuda())
-        #     sum_acc += acc
-        #     sum_loss += loss
-        # print('[%5d/%5d], valid_loss/accuracy = %6.8f/%6.7f' % (step%1000, (max_epoch*batches)%1000,
-        #                                             sum_loss, sum_acc,
-        #                                             ))
-        # logger.info('[%5d/%5d], valid_loss/accuracy = %6.8f/%6.7f' % (step%1000, (max_epoch*batches)%1000,
-        #                                                         sum_loss, sum_acc,
-        #                                                         ))
-        # writer.add_scalar('Valid Loss', sum_loss, step%1000)
-        # writer.add_scalar('Valid Accuracy', sum_acc, step%1000)
+                
+        sum_loss = 0
+        sum_acc = 0
+        for x, y, l in  valid_reader.iter():
+            pred_scores, _ = senti_model(x)
+            loss = loss_fn(pred_scores, torch.tensor(y, dtype=torch.float32).cuda())
+            loss.backward() # to release the GPU cache...... 
+            sum_acc += acc
+            sum_loss += loss
+        sum_acc = sum_acc/(1.0*valid_reader.label.shape[0])
+        sum_loss = sum_loss/(1.0*valid_reader.label.shape[0])
+        print('[%5d/%5d], valid_loss/accuracy = %6.8f/%6.7f' % (epoch, max_epoch,
+                                                    sum_loss, sum_acc,
+                                                    ))
+        logger.info('[%5d/%5d], valid_loss/accuracy = %6.8f/%6.7f' % (epoch, max_epoch,
+                                                                sum_loss, sum_acc,
+                                                                ))
+        writer.add_scalar('Valid Loss', sum_loss, epoch)
+        writer.add_scalar('Valid Accuracy', sum_acc, epoch)
         save_as = '/home/hadoop/ERD/BERTTwitter/epoch%03d_%.4f.pkl' % (step%1000, sum_acc)
         torch.save(senti_model.state_dict(), save_as)
         sum_acc = 0.0
         sum_loss = 0.0
-                    
 
 
-# In[13]:
+# In[12]:
 
 
 from logger import MyLogger
