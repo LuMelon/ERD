@@ -52,6 +52,9 @@ def get_data_len():
 def get_curtime():
     return time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time()))
 
+def get_data_y():
+    global data_y
+    return data_y
 
 # In[5]:
 
@@ -390,7 +393,7 @@ def layer2seq(bert, layer, cuda=False):
     else: 
         outs = [bert( torch.tensor([input_]))
                     for input_ in layer]
-    states = [item[0][0] for item in outs]
+    states = [item[1] for item in outs]
     return rnn_utils.pad_sequence(states, batch_first=True)
 
 def Word_ids2SeqStates(word_ids, bert, ndim, cuda=False):

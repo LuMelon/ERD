@@ -209,23 +209,16 @@ def TrainRDMModel(rdm_model, bert, rdm_classifier,
     init_states = torch.zeros([1, 5, rdm_model.hidden_dim], dtype=torch.float32).cuda()
     weight = torch.tensor([2.0, 1.0], dtype=torch.float32).cuda()
     loss_fn = nn.CrossEntropyLoss(weight=weight)
-#     loss_fn = Loss_Fn
     optim = torch.optim.Adagrad([
                                 {'params': bert.parameters(), 'lr':5e-5},
                                 {'params': rdm_classifier.parameters(), 'lr': 5e-5},
                                 {'params': rdm_model.parameters(), 'lr': 5e-5}
-#                                 {'params': sentiModel.parameters(), 'lr': 1e-2}
                              ]
-#                                 weight_decay = 0.2
     )
     
-#     for par in rdm_classifier.parameters():
-#         par.register_hook(lambda grad: print("rdm_cls grad:", grad.sum()))
-        
-#     for par in rdm_model.parameters():
-#         par.register_hook(lambda grad: print("rdm_gru grad:", grad.sum()))
-    
     writer = SummaryWriter(log_dir)
+    acc_l = np.zeros(int(batch_size/max_gpu_batch))
+    loss_l = np.zeros(int(batch_size/max_gpu_batch))
     for step in range(t_steps):
         optim.zero_grad()
         for j in range(int(batch_size/max_gpu_batch)):
@@ -233,7 +226,7 @@ def TrainRDMModel(rdm_model, bert, rdm_classifier,
                 x, x_len, y = get_df_batch(step, max_gpu_batch, new_data_len, tokenizer=tokenizer)
             else:
                 x, x_len, y = get_df_batch(step, max_gpu_batch, tokenizer=tokenizer)
-#             with torch.no_grad():
+                
             x_emb = Word_ids2SeqStates(x, bert, 3, cuda=True) 
             batchsize, max_seq_len, max_sent_len,                                     emb_dim = x_emb.shape
             rdm_hiddens, rdm_outs = rdm_model(x_emb, x_len, init_states)
@@ -246,31 +239,16 @@ def TrainRDMModel(rdm_model, bert, rdm_classifier,
             )
             rdm_preds = rdm_scores.argmax(axis=1)
             y_label = y.argmax(axis=1)
+            acc_l[j], _, _, _, _, _, _ = Count_Accs(y_label, rdm_preds)
             loss = loss_fn(rdm_scores, torch.tensor(y_label).cuda())
             loss.backward()
-        optim.step()
-        acc, pos_acc, neg_acc, y_idxs, pos_idxs,         neg_idxs, correct_preds = Count_Accs(y_label, rdm_preds)
-#         print("step %d| pos_acc/pos_cnt = %3.3f/%3d,                neg_acc/neg_cnt = %3.3f/%3d                 pos_pred/all_pred = %2d/%2d"%(
-#                 step, pos_acc, len(pos_idxs),
-#                 neg_acc, len(neg_idxs), 
-#                 sum(rdm_scores.argmax(axis=1)),
-#                 len(rdm_scores)
-#                 )
-#         )
-#             logger.info("correct_preds:%d|%s \n \
-#                          pos_idxs:%d|%s \n \
-#                          neg_idxs:%d|%s \
-#                          "%(
-#                             4*step+j, str(correct_preds.tolist()), 
-#                             4*step+j, str(pos_idxs),
-#                             4*step+j, str(neg_idxs)
-#                            )
-#                        )
-        writer.add_scalar('Train Loss', loss, step)
-        writer.add_scalar('Train Accuracy', acc, step)
+            loss_l[j] = loss
+        optim.step()        
+        writer.add_scalar('Train Loss', loss_l.mean(), step)
+        writer.add_scalar('Train Accuracy', acc_l.mean(), step)
 
-        sum_loss += loss
-        sum_acc += acc
+        sum_loss += loss_l.mean()
+        sum_acc += acc_l.mean()
         
 
         if step % 10 == 9:
@@ -479,7 +457,7 @@ rdm_logger = MyLogger("RDMLogger")
 
 
 TrainRDMModel(rdm_model, bert, rdm_classifier, 
-                    tokenizer, 1000, new_data_len=[], logger=rdm_logger, 
+                    tokenizer, 10000, new_data_len=[], logger=rdm_logger, 
                         log_dir="RDMBertTrain")
 
 
