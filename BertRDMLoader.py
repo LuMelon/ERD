@@ -178,6 +178,11 @@ def load_data_fast():
     data_ID = np.load("data/data_ID.npy").tolist()
     data_len = np.load("data/data_len.npy").tolist()
     data_y = np.load("data/data_y.npy").tolist()
+#     with open("data/test_data_dict.txt", "rb") as handle:
+#             data = pickle.load(handle)
+#     data_ID = np.load("data/test_data_ID.npy").tolist()
+#     data_len = np.load("data/test_data_len.npy").tolist()
+#     data_y = np.load("data/test_data_y.npy").tolist()
     max_sent = max( map(lambda value: max(map(lambda txt_list: len(txt_list), value['text']) ), list(data.values()) ) )
     print("max_sent:", max_sent, ",  max_seq_len:", max(data_len))
     eval_flag = int(len(data_ID) / 4) * 3
@@ -393,7 +398,7 @@ def layer2seq(bert, layer, cuda=False):
     else: 
         outs = [bert( torch.tensor([input_]))
                     for input_ in layer]
-    states = [item[1] for item in outs]
+    states = [item[0][0] for item in outs]
     return rnn_utils.pad_sequence(states, batch_first=True)
 
 def Word_ids2SeqStates(word_ids, bert, ndim, cuda=False):

@@ -126,11 +126,16 @@ def Word2IDs(word):
 
 def load_data_fast():
     global data, data_ID, data_len, data_y, eval_flag
-    with open("data/data_dict.txt", "rb") as handle:
+#     with open("data/data_dict.txt", "rb") as handle:
+#         data = pickle.load(handle)
+#     data_ID = np.load("data/data_ID.npy").tolist()
+#     data_len = np.load("data/data_len.npy").tolist()
+#     data_y = np.load("data/data_y.npy").tolist()
+    with open("data/test_data_dict.txt", "rb") as handle:
         data = pickle.load(handle)
-    data_ID = np.load("data/data_ID.npy").tolist()
-    data_len = np.load("data/data_len.npy").tolist()
-    data_y = np.load("data/data_y.npy").tolist()
+    data_ID = np.load("data/test_data_ID.npy").tolist()
+    data_len = np.load("data/test_data_len.npy").tolist()
+    data_y = np.load("data/test_data_y.npy").tolist()
     max_sent = max( map(lambda value: max(map(lambda txt_list: len(txt_list), value['text']) ), list(data.values()) ) )
     print("max_sent:", max_sent, ",  max_seq_len:", max(data_len))
     tf.flags.DEFINE_integer("max_seq_len", max(data_len), "Max length of sequence (default: 300)")
