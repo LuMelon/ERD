@@ -170,7 +170,7 @@ if __name__ == "__main__":
             
             # df model
             df_global_step = tf.Variable(0, name="global_step", trainable=False)
-            df_train_op = tf.train.AdagradOptimizer(0.05).minimize(mm.loss, df_global_step)
+            df_train_op = tf.train.AdagradOptimizer(0.001).minimize(mm.loss, df_global_step)
 
             # rl model
             rl_global_step = tf.Variable(0, name="global_step", trainable=False)
@@ -179,33 +179,34 @@ if __name__ == "__main__":
             saver = tf.train.Saver(tf.global_variables(), max_to_keep=4)
             sess.run(tf.global_variables_initializer())
 
-    summary_writer = tf.summary.FileWriter("./reports/", graph=sess.graph)
-        # ckpt_dir = "df_saved_erd"
-        # checkpoint = tf.train.get_checkpoint_state(ckpt_dir)
-        # if checkpoint and checkpoint.model_checkpoint_path:
-        #     print("--------------Debug1------------------")
-        #     saver.restore(sess, checkpoint.model_checkpoint_path)
-        #     print(checkpoint.model_checkpoint_path+" is restored.")
-        #     logger.info(checkpoint.model_checkpoint_path+" is restored.")
-        # else:
-        #     df_train(sess, summary_writer, mm, 0.80, 20000)
-        #     saver.save(sess, "df_saved_erd/model")
-        #     print("df_model "+" saved")
-        #     logger.info("df_model "+" saved")
-    df_train(sess, summary_writer, mm, 0.90, 20000)
-
-    for i in range(20):
-        rl_train(sess, mm, 0.5, 50000)
-        saver.save(sess, "rl_saved_erd/model"+str(i))
-        print("rl_model "+str(i)+" saved")
-        logger.info("rl_model "+str(i)+" saved")
-        new_len = get_new_len(sess, mm)
-        acc = df_train(sess, summary_writer, mm, 0.9, 1000, new_len)
-        saver.save(sess, "df_saved_erd/model"+str(i))
-        print("df_model "+str(i)+" saved")
-        logger.info("df_model "+str(i)+" saved")
-        if acc > 0.9:
-            break
+            summary_writer = tf.summary.FileWriter("./reports/", graph=sess.graph)
+            ckpt_dir = "df_saved_erd"
+            checkpoint = tf.train.get_checkpoint_state(ckpt_dir)
+            if checkpoint and checkpoint.model_checkpoint_path:
+                print("--------------Debug1------------------")
+                saver.restore(sess, checkpoint.model_checkpoint_path)
+                print(checkpoint.model_checkpoint_path+" is restored.")
+                logger.info(checkpoint.model_checkpoint_path+" is restored.")
+        #     else:
+        #         df_train(sess, summary_writer, mm, 0.80, 20000)
+        #         saver.save(sess, "df_saved_erd/model")
+        #         print("df_model "+" saved")
+        #         logger.info("df_model "+" saved")
+            df_train(sess, summary_writer, mm, 0.90, 50000)
+            print("df_model "+" saved")
+            logger.info("df_model "+" saved")
+#             for i in range(20):
+#                 rl_train(sess, mm, 0.5, 50000)
+#                 saver.save(sess, "rl_saved_erd/model"+str(i))
+#                 print("rl_model "+str(i)+" saved")
+#                 logger.info("rl_model "+str(i)+" saved")
+#                 new_len = get_new_len(sess, mm)
+#                 acc = df_train(sess, summary_writer, mm, 0.9, 1000, new_len)
+#                 saver.save(sess, "df_saved_erd/model"+str(i))
+#                 print("df_model "+str(i)+" saved")
+#                 logger.info("df_model "+str(i)+" saved")
+#                 if acc > 0.9:
+#                     break
 
     print("The End of My Program")
     logger.info("The End of My Program")
