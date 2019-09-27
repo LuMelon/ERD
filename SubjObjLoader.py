@@ -78,6 +78,11 @@ class SubjObjReader:
             text = text.replace(k, v)
         words = re.split('(?:[^a-zA-Z]+)', text.lower().strip() )
         return words
+    
+    def reset_batchsize(self, new_batch_size):
+        self.words = self.words.reshape(-1, new_batch_size)
+        self.label = self.label.reshape(-1, new_batch_size, 2)
+        self.words_num = self.words_num.reshape(-1, new_batch_size)
         
     def iter(self):
         for x, y, l in zip(self.words, self.label, self.words_num):
