@@ -81,6 +81,11 @@ class tSentiReader:
         self.label = self.label.reshape(-1, new_batch_size, label_num)
         self.words_num = self.words_num.reshape(-1, new_batch_size)
     
+    def sample(self):
+        batches, _, _ = self.label.shape
+        batch_idx = random.randint(0, batches-1)
+        return self.words[batch_idx], self.label[batch_idx], self.words_num[batch_idx]
+    
     def iter(self):
         for x, y, l in zip(self.words, self.label, self.words_num):
             yield x, y, l 
