@@ -418,17 +418,19 @@ def get_new_len(rdm_model, cm_model, bert, tokenizer, FLAGS):
 
 # In[30]:
 
-
-def get_RL_Train_batch(D, FLAGS):
-    s_state = torch.zeros([1, FLAGS.batch_size, FLAGS.hidden_dim], dtype=torch.float32) 
-    s_x = torch.zeros([FLAGS.batch_size, FLAGS.max_sent_len, FLAGS.embedding_dim], dtype=torch.float32)
+def get_RL_Train_batch(D, FLAGS, cuda=False):
+    m_batch = random.sample(D, FLAGS.batch_size)
+    s_state = torch.zeros([1, FLAGS.batch_size, FLAGS.hidden_dim], dtype=torch.float32)
+    s_x = []
     s_isStop = torch.zeros([FLAGS.batch_size, FLAGS.action_num], dtype=torch.float32)
     s_rw = torch.zeros([FLAGS.batch_size], dtype=torch.float32)
-    m_batch = random.sample(D, FLAGS.batch_size)
     for i in range(FLAGS.batch_size):
         s_state[0][i] = m_batch[i][0]
-        s_x[i] = m_batch[i][1]
+        s_x.append(m_batch[i][1])
         s_isStop[i][m_batch[i][2]] = 1
         s_rw[i] = m_batch[i][3]
-    return s_state, s_x, s_isStop, s_rw
+    if cuda:
+        return s_state.cuda(), s_x, s_isStop.cuda(), s_rw.cuda()
+    else:
+        return s_state, s_x, s_isStop, s_rw
 
