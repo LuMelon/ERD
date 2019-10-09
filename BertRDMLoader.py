@@ -398,11 +398,6 @@ def padding_sequence(sequences):
     return out_tensor
 
 
-def get_new_len(rdm_model, cm_model, bert, tokenizer, FLAGS):
-
-    return new_x_len
-
-
 # In[30]:
 
 def get_RL_Train_batch(D, FLAGS, cuda=False):
