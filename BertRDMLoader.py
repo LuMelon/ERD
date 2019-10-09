@@ -357,32 +357,6 @@ def get_reward(isStop, ss, pys, ids, seq_ids):
     return reward
 
 
-# In[28]:
-
-
-def get_new_len(sess, mm):
-    new_x_len = np.zeros([len(data_ID)], dtype=np.int32)
-    for i in range(len(data_ID)):
-        e_state = np.zeros([1, FLAGS.hidden_dim], dtype=np.float32)
-        # e_state = sess.run(mm.df_state, feed_dict={mm.init_states: init_state})
-        for j in range(data_len[i]):
-            t_words = data[data_ID[i]]['text'][j]
-            e_x = np.zeros([1, FLAGS.max_sent_len, FLAGS.embedding_dim], dtype=np.float32)
-            if len(t_words) != 0:
-                e_x[0][:len(t_words)] = c2vec.vectorize_words(t_words)
-            batch_dic = {mm.rl_state: e_state, mm.rl_input: e_x, mm.dropout_keep_prob: 1.0}
-            e_isStop, mNewState = sess.run([mm.isStop, mm.rl_new_state], batch_dic)
-            e_state = mNewState
-
-            if e_isStop == 1:
-                new_x_len[i] = j+1
-                break
-        if new_x_len[i] == 0 or new_x_len[i] > data_len[i]:
-            new_x_len[i] = data_len[i]
-            
-    return new_x_len
-
-
 def padding_sequence(sequences):
     max_size = sequences[0].size()
     trailing_dims = max_size[2:]
@@ -416,3 +390,19 @@ def get_RL_Train_batch(D, FLAGS, cuda=False):
     else:
         return s_state, s_x, s_isStop, s_rw
 
+def get_new_len(sentence2vec, rdm_model, cm_model, FLAGS, cuda):
+    # 因为计算句子向量的方式不一致，所以这个函数在生成句子向量的时候，应当要抽离出来,生成句子向量的部分在各个模型中自己定义
+    new_x_len = np.zeros([len(data_ID)], dtype=np.int32)
+    for i in range(len(data_ID)):
+        init_state = torch.zeros([1, 1, FLAGS.hidden_dim], dtype=torch.float32) if not cuda else torch.zeros([1, 1, FLAGS.hidden_dim], dtype=torch.float32).cuda()
+        for j in range(data_len[i]):
+            sentence_emb = sentence2vec(data[data_ID[i]]['text'][j])
+            stopScore, isStop, rl_new_state = cm_model(rdm_model, sentence_emb, init_state)
+            print("params:", isStop[0], isStop)
+            init_state = rl_new_state
+            if isStop[0] == 1:
+                new_x_len[i] = j+1
+                break
+        if new_x_len[i] == 0 or new_x_len[i] > data_len[i]:
+            new_x_len[i] = data_len[i]
+    return new_x_len
