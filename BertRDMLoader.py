@@ -390,19 +390,66 @@ def get_RL_Train_batch(D, FLAGS, cuda=False):
     else:
         return s_state, s_x, s_isStop, s_rw
 
+
 def get_new_len(sentence2vec, rdm_model, cm_model, FLAGS, cuda):
     # 因为计算句子向量的方式不一致，所以这个函数在生成句子向量的时候，应当要抽离出来,生成句子向量的部分在各个模型中自己定义
+    ids = list(range(500))
+    id_len = [0]*500
+    stoped = [0]*500
+    new_id = 501
     new_x_len = np.zeros([len(data_ID)], dtype=np.int32)
-    for i in range(len(data_ID)):
-        init_state = torch.zeros([1, 1, FLAGS.hidden_dim], dtype=torch.float32) if not cuda else torch.zeros([1, 1, FLAGS.hidden_dim], dtype=torch.float32).cuda()
-        for j in range(data_len[i]):
-            sentence_emb = sentence2vec(data[data_ID[i]]['text'][j])
+    zero_tensor = torch.zeros([1, 1, 768]) if not cuda else torch.zeros([1, 1, 768]).cuda()
+    with torch.no_grad():
+        while sum(stoped) != 500:
+            init_state = torch.zeros([1, 500, FLAGS.hidden_dim], dtype=torch.float32) if not cuda else torch.zeros([1, 500, FLAGS.hidden_dim], dtype=torch.float32).cuda()
+            try:
+                sentences = [data[data_ID[idx]]['text'][idx_len] if stoped[t] == 0 else [] for (t, (idx, idx_len)) in enumerate(list(zip(ids, id_len)))]
+            except:
+                print(t, idx, idx_len)
+                raise
+            try:
+                sentence_emb = torch.cat([sentence2vec(sent) if stoped[t]==0 else zero_tensor for (t,sent) in enumerate(sentences)], axis=0)
+            except:
+                print("sent:", sent)
+                raise
             stopScore, isStop, rl_new_state = cm_model(rdm_model, sentence_emb, init_state)
-            print("params:", isStop[0], isStop)
             init_state = rl_new_state
-            if isStop[0] == 1:
-                new_x_len[i] = j+1
-                break
+            for k in range(len(isStop)):
+                if stoped[k] == 1:
+                    continue
+                if isStop[k] == 1: # 如果在这个位置停止了，就要重新调入一个序列
+                    new_x_len[ids[k]] = id_len[k]+1
+                    if new_id < len(data_ID):
+                        ids[k] = new_id
+                        id_len[k] = 0
+                        init_state[0][k].fill_(0.0)
+                        new_id += 1
+                    else:
+                        stoped[k] = 1
+                else:
+                    id_len[k] += 1
+                    if id_len[k] == data_len[ids[k]]:
+                        new_x_len[ids[k]] = id_len[k]
+                        if new_id < len(data_ID):
+                            ids[k] = new_id
+                            id_len[k] = 0
+                            init_state[0][k].fill_(0.0)
+                            new_id += 1
+                        else:
+                            stoped[k] = 1
+                        
+    for i in range(len(data_len)):    
         if new_x_len[i] == 0 or new_x_len[i] > data_len[i]:
+            print("Error")
             new_x_len[i] = data_len[i]
     return new_x_len
+#　先计算一个批次，这个批次会改变，直到不能再变
+# 有两种情况需要改变:
+#   第一，某个序列经过ｃｍ模型判定，他可以停止了
+#   第二，某个序列一直不能停止，直到走到这个序列的尽头
+# 不能再变有两个条件：　
+# 改变的时候，要变三个点:
+#   第一个是存储的ｉｄ要变，　
+#   第二个是存储的len要变, 
+#   第三个是要重置init_state
+# 不能再变时，要把这个位置设置为停止
