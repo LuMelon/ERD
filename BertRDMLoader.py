@@ -440,7 +440,7 @@ def get_new_len(sentence2vec, rdm_model, cm_model, FLAGS, cuda):
                         
     for i in range(len(data_len)):    
         if new_x_len[i] == 0 or new_x_len[i] > data_len[i]:
-            print("Error")
+            print("Error:")
             new_x_len[i] = data_len[i]
     return new_x_len
 #　先计算一个批次，这个批次会改变，直到不能再变
