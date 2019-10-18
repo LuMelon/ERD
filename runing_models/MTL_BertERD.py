@@ -126,6 +126,19 @@ class CM_Model(nn.Module):
         return stopScore, isStop, rl_new_state
 
 
+
+def Sent2Vec_Generater(tokenizer, bert, cuda):
+    def fn(sentence):
+        input_ids = tokenizer.encode(
+                            sentence,
+                            add_special_tokens=True
+                        )
+        input_ids = torch.tensor([input_ids]).cuda() if cuda else torch.tensor([input_ids])
+        outs = bert(input_ids)
+        sentence_emb = outs[1].reshape([1, 1,-1])
+        return sentence_emb
+    return fn
+
 # In[3]:
 
 
@@ -415,7 +428,7 @@ def MTLTrainRDMModel(rdm_model, bert, rdm_classifier,
     acc_tmp = np.zeros([3, int(batch_size/max_gpu_batch)])
     loss_tmp = np.zeros([4, int(batch_size/max_gpu_batch)])
 
-
+    best_valid_acc = 0.0
     for step in range(t_steps):
         optim.zero_grad()
         for j in range(int(batch_size/max_gpu_batch)):
@@ -511,19 +524,23 @@ def MTLTrainRDMModel(rdm_model, bert, rdm_classifier,
             )
             )
             if step%100 == 99:
-                rdm_save_as = './%s/rdmModel_epoch%03d.pkl'% (log_dir, step/100)
-                torch.save(
-                    {
-                        "bert":bert.state_dict(),
-                        "transformer":transformer.state_dict(),
-                        "task_embedding":task_embedding.state_dict(),
-                        "senti_classifier": senti_classifier.state_dict(),
-                        "subj_classifier": subj_classifier.state_dict(),
-                        "rmdModel":rdm_model.state_dict(),
-                        "rdm_classifier": rdm_classifier.state_dict()
-                    },
-                    rdm_save_as
-                )
+                valid_acc = accuracy_on_valid_data(bert, rdm_model, rdm_classifier, [], tokenizer)
+                if valid_acc > best_valid_acc:
+                    print("##### valid_acc:", valid_acc)
+                    best_valid_acc = valid_acc
+                    rdm_save_as = './%s/rdmModel_best.pkl'% (log_dir)
+                    torch.save(
+                        {
+                            "bert":bert.state_dict(),
+                            "transformer":transformer.state_dict(),
+                            "task_embedding":task_embedding.state_dict(),
+                            "senti_classifier": senti_classifier.state_dict(),
+                            "subj_classifier": subj_classifier.state_dict(),
+                            "rmdModel":rdm_model.state_dict(),
+                            "rdm_classifier": rdm_classifier.state_dict()
+                        },
+                        rdm_save_as
+                    )
     #                 rdm_model, bert, sentiModel, rdm_classifier
             sum_acc = 0.0
             sum_loss = 0.0
@@ -564,25 +581,44 @@ senti_train_reader.label = np.delete(senti_train_reader.label, 1, axis=2)
 
 load_data_fast()
 
-
-if torch.cuda.device_count() > 1:
-    # device_ids = [int(device_id) for device_id in sys.argv[1].split(",")]
-    device_ids = list( range( len( sys.argv[1].split(",") ) ) )
-    bert = nn.DataParallel(bert, device_ids=device_ids)
-    transformer = nn.DataParallel(transformer, device_ids=device_ids)
-
-    device_name = "cuda:%d"%device_ids[0]
-    device = torch.device(device_name)
-    bert.to(device)
-    transformer.to(device)
-
-joint_save_as = './MTLRDM/rdmModel_epoch150.pkl'
+joint_save_as = './MTLTrain/jointModel_epoch015.pkl'
 checkpoint = torch.load(joint_save_as)
 senti_cls.load_state_dict(checkpoint['senti_classifier'])
 bert.load_state_dict(checkpoint['bert'])
 transformer.load_state_dict(checkpoint['transformer'])
 task_embedding.load_state_dict(checkpoint['task_embedding'])
 subj_cls.load_state_dict(checkpoint['subj_classifier'])
+
+
+# In[10]:
+if torch.cuda.device_count() > 1:
+    # device_ids = [int(device_id) for device_id in sys.argv[1].split(",")]
+    device_ids = list( range( len( sys.argv[1].split(",") ) ) )
+    bert = nn.DataParallel(bert, device_ids=device_ids)
+    transformer = nn.DataParallel(transformer, device_ids=device_ids)
+    device_name = "cuda:%d"%device_ids[0]
+    device = torch.device(device_name)
+    bert.to(device)
+    transformer.to(device)
+
+pretrained_model = "./MTLRDM/rdmModel_best.pkl"
+if os.path.exists(pretrained_model):
+    checkpoint = torch.load(pretrained_model)
+    senti_cls.load_state_dict(checkpoint['senti_classifier'])
+    bert.load_state_dict(checkpoint['bert'])
+    transformer.load_state_dict(checkpoint['transformer'])
+    task_embedding.load_state_dict(checkpoint['task_embedding'])
+    subj_cls.load_state_dict(checkpoint['subj_classifier'])   
+    rdm_model.load_state_dict("rmdModel") 
+    rdm_classifier.load_state_dict("rdm_classifier")
+else:
+    MTLTrainRDMModel(rdm_model, bert, rdm_classifier,
+                         transformer, task_embedding, senti_cls, subj_cls, 
+                         senti_train_reader, subj_train_reader, 
+                        tokenizer, 20000, new_data_len=[], logger=None, cuda=True, 
+                            log_dir="MTLRDM")
+
+
 
 # #### 标准ERD模型
 for i in range(20):

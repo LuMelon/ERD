@@ -92,8 +92,39 @@ class RDM_Model(nn.Module):
         # return hidden_outs, final_outs
         return df_outputs
 
-
-# In[4]:
+class CM_Model(nn.Module):
+    def __init__(self, sentence_embedding_dim, hidden_dim, action_num):
+        super(CM_Model, self).__init__()
+        self.sentence_embedding_dim = sentence_embedding_dim
+        self.hidden_dim = hidden_dim
+        self.action_num = action_num
+#         self.PoolLayer = pooling_layer(self.embedding_dim, 
+#                                             self.hidden_dim)
+        self.DenseLayer = nn.Linear(self.hidden_dim, 64)
+        self.Classifier = nn.Linear(64, self.action_num)
+        
+    def forward(self, rdm_model, rl_input, rl_state):
+        """
+        rl_input: [batchsize, max_word_num, sentence_embedding_dim]
+        rl_state: [1, batchsize, hidden_dim]
+        """
+        assert(rl_input.ndim==3)
+        batchsize, max_word_num, embedding_dim = rl_input.shape
+        rl_output, rl_new_state = rdm_model.gru_model(
+                                            rl_input, 
+                                            rl_state
+                                        )
+        rl_h1 = nn.functional.relu(
+            self.DenseLayer(
+#                 rl_state.reshape([len(rl_input), self.hidden_dim]) #it is not sure to take rl_state , rather than rl_output, as the feature
+                rl_output.reshape(
+                    [len(rl_input), self.hidden_dim]
+                )
+            )
+        )
+        stopScore = self.Classifier(rl_h1)
+        isStop = stopScore.argmax(axis=1)
+        return stopScore, isStop, rl_new_state
 
 
 def Count_Accs(ylabel, preds):
@@ -127,7 +158,20 @@ def Loss_Fn(ylabel, pred_scores):
     else:
         print("totally unbalanced data")
         return diff.mean()
-    
+ 
+def Sent2Vec_Generater(tokenizer, bert, cuda):
+    def fn(sentence):
+        input_ids = tokenizer.encode(
+                            sentence,
+                            add_special_tokens=True
+                        )
+        input_ids = torch.tensor([input_ids]).cuda() if cuda else torch.tensor([input_ids])
+        outs = bert(input_ids)
+        sentence_emb = outs[1].reshape([1, 1,-1])
+        return sentence_emb
+    return fn
+
+
 def WeightsForUmbalanced(data_label):
     _, _, labels = data_label.shape
     label_cnt = data_label.reshape([-1, labels]).sum(axis=0)
@@ -174,8 +218,189 @@ def senti_data2bert_tensors(sent_list, cuda):
         attn_mask = attn_mask.cuda()
     return sent_padding, attn_mask
 
+def subj_cls_train(subj_reader, bert, transformer, task_embedding,
+                   subj_classifier, train_epochs,
+                   cuda=True, log_dir = "SubjRDM"
+                  ):
+    subj_weights = torch.tensor(
+            WeightsForUmbalanced(
+                subj_reader.label
+            ),
+            dtype = torch.float32
+    )
+    subj_loss_fn = nn.CrossEntropyLoss(weight=subj_weights) if not cuda else nn.CrossEntropyLoss(weight=subj_weights.cuda())
 
-# In[5]:
+    optim = torch.optim.Adagrad([
+                                {'params': bert.parameters(), 'lr':1e-6},
+                                {'params': task_embedding.parameters(), 'lr':5e-5},
+                                {'params': transformer.parameters(), 'lr': 5e-5},
+                                {'params': subj_classifier.parameters(), 'lr': 5e-5}
+                             ]
+    )
+    losses = np.zeros([10]) 
+    accs = np.zeros([10])
+    subj_task_id = torch.tensor([1]).cuda() if cuda else torch.tensor([1])
+    
+    optim.zero_grad()
+    for epoch in range(train_epochs):
+        step = 0
+        for xsj, ysj, lsj in subj_reader.iter():
+            sent_tensors, sent_mask = senti_data2bert_tensors(xsj, cuda)
+            xsj_embs, _ = bert(sent_tensors, attention_mask = sent_mask)
+            tensors = xsj_embs + task_embedding(subj_task_id)
+            subj_feature = transformer(tensors.transpose(0, 1)).transpose(0, 1)
+            cls_feature = subj_feature.max(axis=1)[0]
+            subj_scores = subj_cls(cls_feature)
+            y_label = torch.tensor(ysj.argmax(axis=1)).cuda() if cuda else torch.tensor(ysj.argmax(axis=1))
+            sj_loss = subj_loss_fn(subj_scores, y_label)
+            sj_acc, _, _, _, _, _, _ = Count_Accs(y_label, subj_scores.argmax(axis=1))
+            sj_loss.backward()
+            torch.cuda.empty_cache()
+            
+            losses[int(step%10)] = sj_loss.cpu()
+            accs[int(step%10)] = sj_acc
+            print("step:%d | loss/acc = %.3f/%.3f"%(step, sj_loss, sj_acc))
+            if step %10 == 9:
+                print('subjective task: %6d: [%5d/%5d], senti_loss/senti_acc = %6.8f/%6.7f ' % ( step,
+                                                                                epoch, train_epochs,
+                                                                                losses.mean(), accs.mean(),
+                                                                            )
+                         )       
+            step += 1 
+        subj_save_as = './%s/subjModel_epoch%03d.pkl'% (log_dir, epoch)
+        torch.save(
+                            {
+                                "bert":bert.state_dict(),
+                                "transformer":transformer.state_dict(),
+                                "task_embedding":task_embedding.state_dict(),
+                                "subj_classifier": subj_classifier.state_dict(),
+                            },
+                            subj_save_as
+                        )
+
+def TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, stage, t_rw, t_steps, log_dir, logger, FLAGS, cuda=False):
+    batch_size = 20
+    t_acc = 0.9
+    ids = np.array(range(batch_size), dtype=np.int32)
+    seq_states = np.zeros([batch_size], dtype=np.int32)
+    isStop = np.zeros([batch_size], dtype=np.int32)
+    max_id = batch_size
+    df_init_states = torch.zeros([1, batch_size, rdm_model.hidden_dim], dtype=torch.float32).cuda()
+    writer = SummaryWriter(log_dir, filename_suffix="_ERD_CM_stage_%3d"%stage)
+    state = df_init_states
+    D = deque()
+    ssq = []
+    print("in RL the begining")
+    rdm_optim = torch.optim.Adagrad([
+                            {'params': bert.parameters(), 'lr':1e-6},
+                            {'params': rdm_classifier.parameters(), 'lr': 5e-5},
+                            {'params': rdm_model.parameters(), 'lr': 5e-5}
+                         ],
+                            weight_decay = 0.2
+    )
+    rl_optim = torch.optim.Adam([{'params':cm_model.parameters(), 'lr':1e-5}])
+    # get_new_len(sess, mm)
+    data_ID = get_data_ID()
+
+    if len(data_ID) % batch_size == 0: # the total number of events
+        flags = int(len(data_ID) / FLAGS.batch_size)
+    else:
+        flags = int(len(data_ID) / FLAGS.batch_size) + 1
+
+    if os.path.exists("./%s/cached_ssq.pkl"%log_dir):
+    #load the cached ssq
+        with open("./%s/cached_ssq.pkl"%log_dir, 'rb') as handle:
+            ssq = pickle.load(handle)    
+    else:
+        for i in range(flags):
+            with torch.no_grad():
+                x, x_len, y = get_df_batch(i, batch_size, tokenizer=tokenizer)
+                sent_tensors, attn_mask, seq_len = rdm_data2bert_tensors(x, cuda)
+                bert_outs = bert(sent_tensors, attention_mask=attn_mask)
+                pooled_sents = [bert_outs[1][sum(seq_len[:idx]):sum(seq_len[:idx])+seq_len[idx]] for idx, s_len in enumerate(seq_len)]
+                x_emb = rnn_utils.pad_sequence(pooled_sents, batch_first=True).unsqueeze(-2)
+                batchsize, max_seq_len, max_sent_len, emb_dim = x_emb.shape
+                rdm_hiddens = rdm_model(x_emb)
+                batchsize, _, _ = rdm_hiddens.shape
+                rdm_outs = torch.cat(
+                    [ rdm_hiddens[i][x_len[i]-1] for i in range(batchsize)] 
+                    # a list of tensor, where the ndim of tensor is 1 and the shape of tensor is [hidden_size]
+                ).reshape(
+                    [-1, rdm_model.hidden_dim]
+                )
+                print("batch %d"%i)
+                if len(ssq) > 0:
+                    ssq.extend([rdm_classifier(h) for h in rdm_hiddens])
+                else:
+                    ssq = [rdm_classifier(h) for h in rdm_hiddens]
+        # cache ssq for development
+        with open('./%s/cached_ssq.pkl'%log_dir, 'wb') as handle:
+            pickle.dump(ssq, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+
+    print(get_curtime() + " Now Start RL training ...")
+
+    counter = 0
+    sum_rw = 0.0 # sum of rewards
+    data_len = get_data_len()
+
+    while True:
+        if counter > FLAGS.OBSERVE:
+            sum_rw += rw.mean()
+            if counter % 200 == 0:
+                sum_rw = float(sum_rw) / 200
+                print( get_curtime() + " Step: " + str(counter) 
+                       + " REWARD IS " + str(sum_rw) 
+                     )
+                if sum_rw > t_rw:
+                    print("Retch The Target Reward")
+                    break
+                if counter > t_steps:
+                    print("Retch The Target Steps")
+                    break
+                sum_rw = 0.0
+            s_state, s_x, s_isStop, s_rw = get_RL_Train_batch(D, FLAGS, cuda)
+            sent_tensors, attn_mask = senti_data2bert_tensors(input_x, cuda)
+            _, x_emb = bert(sent_tensors, attention_mask=attn_mask)
+            x_emb = x_emb.unsqueeze(-2)
+            stopScore, isStop, rl_new_state = cm_model(rdm_model, x_emb, s_state)
+            out_action = (stopScore*s_isStop).sum(axis=1)
+            rl_cost = torch.mean((s_rw - out_action)*(s_rw - out_action))
+            rl_cost.backward()
+            torch.cuda.empty_cache()
+
+            rl_optim.step()
+    #             rdm_optim.step() #后期要尝试一下，是否要同时训练整个模型
+            writer.add_scalar('RL Cost', rl_cost, counter - FLAGS.OBSERVE)
+            writer.add_scalar('RL Reward', rw.mean(), counter - FLAGS.OBSERVE)
+
+        input_x, input_y, ids, seq_states, max_id = get_rl_batch(ids, seq_states, isStop, max_id, 0, FLAGS, tokenizer=tokenizer)
+
+        with torch.no_grad():
+            sent_tensors, attn_mask = senti_data2bert_tensors(input_x, cuda)
+            _, x_emb = bert(sent_tensors, attention_mask=attn_mask)
+            x_emb = x_emb.unsqueeze(-2)
+            batchsize, max_sent_len, emb_dim = x_emb.shape
+            mss, isStop, mNewState = cm_model(rdm_model, x_emb, state)
+
+        for j in range(FLAGS.batch_size):
+            if random.random() < FLAGS.random_rate:
+                isStop[j] = int(torch.rand(2).argmax())
+            if seq_states[j] == data_len[ids[j]]:
+                isStop[j] = 1
+
+        # eval
+        rw = get_reward(isStop, mss, ssq, ids, seq_states)
+        for j in range(FLAGS.batch_size):
+            D.append((state[0][j], input_x[j], isStop[j], rw[j]))
+            if len(D) > FLAGS.max_memory:
+                D.popleft()
+
+        state = mNewState
+        for j in range(FLAGS.batch_size):
+            if isStop[j] == 1:
+                state[0][j].fill_(0)
+        counter += 1
 
 
 def TrainRDMWithSubj(rdm_model, bert, rdm_classifier,
@@ -213,9 +438,9 @@ def TrainRDMWithSubj(rdm_model, bert, rdm_classifier,
     subj_task_id = torch.tensor([1]) if not cuda else torch.tensor([1]).cuda()
     #-------------------------------------------------------------    
 
-    loss_weight = torch.tensor([0.8, 0.2]) if not cuda else torch.tensor([0.8, 0.2]).cuda()   
+    loss_weight = torch.tensor([0.9, 0.1]) if not cuda else torch.tensor([0.9, 0.1]).cuda()   
     optim = torch.optim.Adagrad([
-                                {'params': bert.parameters(), 'lr':5e-7},
+                                {'params': bert.parameters(), 'lr':5e-5},
                                 {'params': rdm_classifier.parameters(), 'lr': 5e-5},
                                 {'params': rdm_model.parameters(), 'lr': 5e-5},
                                 {'params': task_embedding.parameters(), 'lr':1e-6},
@@ -228,6 +453,7 @@ def TrainRDMWithSubj(rdm_model, bert, rdm_classifier,
     acc_tmp = np.zeros([2, int(batch_size/max_gpu_batch)])
     loss_tmp = np.zeros([3, int(batch_size/max_gpu_batch)])
 
+    best_valid_acc = 0.0
     for step in range(t_steps):
         optim.zero_grad()
         for j in range(int(batch_size/max_gpu_batch)):
@@ -307,18 +533,22 @@ def TrainRDMWithSubj(rdm_model, bert, rdm_classifier,
             )
             )
             if step%100 == 99:
-                rdm_save_as = './%s/sentiRDMModel_epoch%03d.pkl'% (log_dir, step/100)
-                torch.save(
-                    {
-                        "bert":bert.state_dict(),
-                        "transformer":transformer.state_dict(),
-                        "task_embedding":task_embedding.state_dict(),
-                        "subj_classifier": subj_classifier.state_dict(),
-                        "rmdModel":rdm_model.state_dict(),
-                        "rdm_classifier": rdm_classifier.state_dict()
-                    },
-                    rdm_save_as
-                )
+                valid_acc = accuracy_on_valid_data(bert, rdm_model, rdm_classifier, [], tokenizer)
+                if valid_acc > best_valid_acc:
+                    print("valid_acc:", valid_acc)
+                    best_valid_acc = valid_acc
+                    rdm_save_as = './%s/SubjRDM_best.pkl'% (log_dir)
+                    torch.save(
+                        {
+                            "bert":bert.state_dict(),
+                            "transformer":transformer.state_dict(),
+                            "task_embedding":task_embedding.state_dict(),
+                            "subj_classifier": subj_classifier.state_dict(),
+                            "rmdModel":rdm_model.state_dict(),
+                            "rdm_classifier": rdm_classifier.state_dict()
+                        },
+                        rdm_save_as
+                    )
     #                 rdm_model, bert, sentiModel, rdm_classifier
             sum_acc = 0.0
             sum_loss = 0.0
@@ -328,6 +558,19 @@ def TrainRDMWithSubj(rdm_model, bert, rdm_classifier,
 
 
 # In[6]:
+
+with open("config.json", "r") as cr:
+    dic = json.load(cr)
+
+class adict(dict):
+    ''' Attribute dictionary - a convenience data structure, similar to SimpleNamespace in python 3.3
+        One can use attributes to read/write dictionary content.
+    '''
+    def __init__(self, *av, **kav):
+        dict.__init__(self, *av, **kav)
+        self.__dict__ = self
+
+FLAGS = adict(dic)
 
 
 tt = BertTokenizer.from_pretrained("./bertModel/")
@@ -342,7 +585,7 @@ task_embedding = task_embedding.cuda()
 subj_cls = subj_cls.cuda()
 rdm_model = RDM_Model(768, 300, 256, 0.2).cuda()
 rdm_classifier = nn.Linear(256, 2).cuda()
-
+cm_model = CM_Model(300, 256, 2).cuda()
 
 # In[7]:
 
@@ -352,17 +595,6 @@ obj_file = "./rotten_imdb/obj.data"
 tr, dev, te = load_data(subj_file, obj_file)
 subj_train_reader = SubjObjReader(tr, 20, tt)
 load_data_fast()
-
-
-# In[8]:
-
-
-joint_save_as = './MTLTrain/jointModel_epoch015.pkl'
-checkpoint = torch.load(joint_save_as)
-bert.load_state_dict(checkpoint['bert'])
-transformer.load_state_dict(checkpoint['transformer'])
-task_embedding.load_state_dict(checkpoint['task_embedding'])
-subj_cls.load_state_dict(checkpoint['subj_classifier'])
 
 
 # In[9]:
@@ -377,9 +609,60 @@ if torch.cuda.device_count() > 1:
     bert.to(device)
     transformer.to(device)
 
+# In[8]:
 
-TrainRDMWithSubj(rdm_model, bert, rdm_classifier,
+
+joint_save_as = './SubjRDM/subjModel_epoch000.pkl'
+if os.path.exists(joint_save_as):
+    checkpoint = torch.load(joint_save_as)
+    bert.load_state_dict(checkpoint['bert'])
+    transformer.load_state_dict(checkpoint['transformer'])
+    task_embedding.load_state_dict(checkpoint['task_embedding'])
+    subj_cls.load_state_dict(checkpoint['subj_classifier'])
+else:
+    subj_cls_train(subj_train_reader, bert, transformer, task_embedding, subj_cls, 1, cuda=True)
+
+rdm_save_as = './SubjRDM/SubjRDM_best.pkl'
+if os.path.exists(rdm_save_as):
+    checkpoint = torch.load(joint_save_as)
+    bert.load_state_dict(checkpoint['bert'])
+    transformer.load_state_dict(checkpoint['transformer'])
+    task_embedding.load_state_dict(checkpoint['task_embedding'])
+    subj_cls.load_state_dict(checkpoint['subj_classifier'])
+    rdm_model.load_state_dict(checkpoint['rmdModel'])
+    rdm_classifier.load_state_dict(checkpoint["rdm_classifier"])
+else:
+    TrainRDMWithSubj(rdm_model, bert, rdm_classifier,
+                         transformer, task_embedding, subj_cls, 
+                         subj_train_reader, 
+                        tt, 20000, new_data_len=[], logger=None, cuda=True, 
+                            log_dir="SubjRDM")
+
+print("train rdm model with subj task is completed!")
+
+for i in range(20):
+    if i==0:
+        TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tt, i, 0.5, 50000, "SubjERD/", None, FLAGS, cuda=True)
+    else:
+        TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tt, i, 0.5, 5000, "SubjERD/", None, FLAGS, cuda=True)
+    erd_save_as = './SubjERD/erdModel_epoch%03d.pkl'% (i)
+    torch.save(
+        {
+            "bert":bert.state_dict(),
+            "rmdModel":rdm_model.state_dict(),
+            "rdm_classifier": rdm_classifier.state_dict(),
+            "cm_model":cm_model.state_dict()
+        },
+        erd_save_as
+    )
+    s2vec = Sent2Vec_Generater(tt, bert, cuda=True)
+    new_len = get_new_len(s2vec, rdm_model, cm_model, FLAGS, cuda=True)
+    print("after new len:")
+    TrainRDMWithSubj(rdm_model, bert, rdm_classifier,
                      transformer, task_embedding, subj_cls, 
                      subj_train_reader, 
-                    tt, 20000, new_data_len=[], logger=None, cuda=True, 
-                        log_dir="SubjRDM")
+                    tt, 1000, new_data_len=[], logger=None, cuda=True, 
+                        log_dir="SubjERD_%d"%i)
+
+
+

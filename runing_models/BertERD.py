@@ -246,6 +246,8 @@ def TrainRDMModel(rdm_model, bert, rdm_classifier,
     writer = SummaryWriter(log_dir, filename_suffix="_ERD_CM_stage_%3d"%stage)
     acc_l = np.zeros(splits)
     loss_l = np.zeros(splits)
+
+    best_valid_acc = 0.0
     for step in range(t_steps):
         optim.zero_grad()
         try:
@@ -304,6 +306,20 @@ def TrainRDMModel(rdm_model, bert, rdm_classifier,
             print('%3d | %d , train_loss/accuracy = %6.8f/%6.7f'             % (step, t_steps, 
                 sum_loss, sum_acc,
                 ))
+            if step%100 == 99:
+                valid_acc = accuracy_on_valid_data(bert, rdm_model, rdm_classifier, [], tokenizer)
+                if valid_acc > best_valid_acc:
+                    print("valid_acc:", valid_acc)
+                    best_valid_acc = valid_acc
+                    rdm_save_as = './%s/BertRDM_best.pkl'% (log_dir)
+                    torch.save(
+                        {
+                            "bert":bert.state_dict(),
+                            "rmdModel":rdm_model.state_dict(),
+                            "rdm_classifier": rdm_classifier.state_dict()
+                        },
+                        rdm_save_as
+                    )
 #                 rdm_model, bert, sentiModel, rdm_classifier
             sum_acc = 0.0
             sum_loss = 0.0
@@ -345,9 +361,9 @@ def TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, stage, t_
     else:
         flags = int(len(data_ID) / FLAGS.batch_size) + 1
 
-    if os.path.exists("./RDMBertTrain/cached_ssq.pkl"):
+    if os.path.exists("./%s/cached_ssq.pkl"%log_dir):
     #load the cached ssq
-        with open("./RDMBertTrain/cached_ssq.pkl", 'rb') as handle:
+        with open("./%s/cached_ssq.pkl"%log_dir, 'rb') as handle:
             ssq = pickle.load(handle)    
     else:
         for i in range(flags):
@@ -372,7 +388,7 @@ def TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, stage, t_
                 else:
                     ssq = [rdm_classifier(h) for h in rdm_hiddens]
         # cache ssq for development
-        with open('./RDMBertTrain/cached_ssq.pkl', 'wb') as handle:
+        with open('./%s/cached_ssq.pkl'%log_dir, 'wb') as handle:
             pickle.dump(ssq, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
 
@@ -467,13 +483,6 @@ rdm_classifier = nn.Linear(256, 2).cuda()
 cm_log_dir="CMBertTrain"
 
 
-# #### 导入模型预训练参数
-pretrained_file = "./RDMBertTrain/rdmModel_epoch019.pkl"
-checkpoint = torch.load(pretrained_file)
-bert.load_state_dict(checkpoint['bert'])
-rdm_model.load_state_dict(checkpoint["rmdModel"])
-rdm_classifier.load_state_dict(checkpoint["rdm_classifier"])
-
 if torch.cuda.device_count() > 1:
     # device_ids = [int(device_id) for device_id in sys.argv[1].split(",")]
     device_ids = list( range( len( sys.argv[1].split(",") ) ) )
@@ -481,6 +490,20 @@ if torch.cuda.device_count() > 1:
     device_name = "cuda:%d"%device_ids[0]
     device = torch.device(device_name)
     bert.to(device)
+
+# #### 导入模型预训练参数
+pretrained_file = "./BertRDM/BertRDM_best.pkl"
+if os.path.exists(pretrained_file):
+    checkpoint = torch.load(pretrained_file)
+    bert.load_state_dict(checkpoint['bert'])
+    rdm_model.load_state_dict(checkpoint["rmdModel"])
+    rdm_classifier.load_state_dict(checkpoint["rdm_classifier"])
+else:
+    TrainRDMModel(rdm_model, bert, rdm_classifier, 
+                    tokenizer, 20000, stage=0, new_data_len=[], logger=None, 
+                        log_dir="BertRDM", cuda=True)
+
+
 
 # #### 标准ERD模型
 for i in range(20):
@@ -502,8 +525,8 @@ for i in range(20):
     new_len = get_new_len(s2vec, rdm_model, cm_model, FLAGS, cuda=True)
     print("after new len:")
     TrainRDMModel(rdm_model, bert, rdm_classifier, 
-                    tokenizer, i, 1000, new_data_len=new_len, logger=rdm_logger, 
-                        log_dir="BertERD")
+                    tokenizer, i, 1000, new_data_len=new_len, logger=None, 
+                        log_dir="BertERD_%d"%i)
 
 
 # In[ ]:

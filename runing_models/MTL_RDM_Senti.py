@@ -168,6 +168,17 @@ def WeightsForUmbalanced(data_label):
 
 # In[4]:
 
+def Sent2Vec_Generater(tokenizer, bert, cuda):
+    def fn(sentence):
+        input_ids = tokenizer.encode(
+                            sentence,
+                            add_special_tokens=True
+                        )
+        input_ids = torch.tensor([input_ids]).cuda() if cuda else torch.tensor([input_ids])
+        outs = bert(input_ids)
+        sentence_emb = outs[1].reshape([1, 1,-1])
+        return sentence_emb
+    return fn
 
 # x_new = [sent1, sent2, sent3, ...]　
 # x_new -> x_old_emb [batchsize, seq_len, sent_emb]：#使用seq_info 将sent组装回去
@@ -300,9 +311,9 @@ def TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, stage, t_
     else:
         flags = int(len(data_ID) / FLAGS.batch_size) + 1
 
-    if os.path.exists("./RDMBertTrain/cached_ssq.pkl"):
+    if os.path.exists("./%s/cached_ssq.pkl"%log_dir):
     #load the cached ssq
-        with open("./RDMBertTrain/cached_ssq.pkl", 'rb') as handle:
+        with open("./%s/cached_ssq.pkl"%log_dir, 'rb') as handle:
             ssq = pickle.load(handle)    
     else:
         for i in range(flags):
@@ -327,7 +338,7 @@ def TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, stage, t_
                 else:
                     ssq = [rdm_classifier(h) for h in rdm_hiddens]
         # cache ssq for development
-        with open('./RDMBertTrain/cached_ssq.pkl', 'wb') as handle:
+        with open('./%s/cached_ssq.pkl'%log_dir, 'wb') as handle:
             pickle.dump(ssq, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
 
@@ -353,7 +364,7 @@ def TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, stage, t_
                     break
                 sum_rw = 0.0
             s_state, s_x, s_isStop, s_rw = get_RL_Train_batch(D, FLAGS, cuda)
-            sent_tensors, attn_mask = sent_list2bert_tensors(input_x, cuda)
+            sent_tensors, attn_mask = senti_data2bert_tensors(input_x, cuda)
             _, x_emb = bert(sent_tensors, attention_mask=attn_mask)
             x_emb = x_emb.unsqueeze(-2)
             stopScore, isStop, rl_new_state = cm_model(rdm_model, x_emb, s_state)
@@ -370,7 +381,7 @@ def TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, stage, t_
         input_x, input_y, ids, seq_states, max_id = get_rl_batch(ids, seq_states, isStop, max_id, 0, FLAGS, tokenizer=tokenizer)
 
         with torch.no_grad():
-            sent_tensors, attn_mask = sent_list2bert_tensors(input_x, cuda)
+            sent_tensors, attn_mask = senti_data2bert_tensors(input_x, cuda)
             _, x_emb = bert(sent_tensors, attention_mask=attn_mask)
             x_emb = x_emb.unsqueeze(-2)
             batchsize, max_sent_len, emb_dim = x_emb.shape
@@ -446,7 +457,8 @@ def TrainRDMWithSenti(rdm_model, bert, rdm_classifier,
     acc_tmp = np.zeros([2, int(batch_size/max_gpu_batch)])
     loss_tmp = np.zeros([3, int(batch_size/max_gpu_batch)])
 
-    for step in range(t_steps):
+    best_valid_acc = 0.0
+    for step in range(90, t_steps):
         optim.zero_grad()
         for j in range(int(batch_size/max_gpu_batch)):
             # RDM loss 用的是bert的pooled emb，　其它模型用的是cls emb
@@ -525,19 +537,22 @@ def TrainRDMWithSenti(rdm_model, bert, rdm_classifier,
                                                                                             sum_loss[2], sum_acc[1]
             )
             )
-            if step%1000 == 999:
-                rdm_save_as = './%s/sentiRDMModel_epoch%03d.pkl'% (log_dir, step/1000)
-                torch.save(
-                    {
-                        "bert":bert.state_dict(),
-                        "transformer":transformer.state_dict(),
-                        "task_embedding":task_embedding.state_dict(),
-                        "senti_classifier": senti_classifier.state_dict(),
-                        "rmdModel":rdm_model.state_dict(),
-                        "rdm_classifier": rdm_classifier.state_dict()
-                    },
-                    rdm_save_as
-                )
+            if step%100 == 99:
+                valid_acc = accuracy_on_valid_data(bert, rdm_model, rdm_classifier, [], tokenizer)
+                if valid_acc > best_valid_acc:
+                    best_valid_acc = valid_acc
+                    rdm_save_as = './%s/SentiRDM_best.pkl'% (log_dir)
+                    torch.save(
+                        {
+                            "bert":bert.state_dict(),
+                            "transformer":transformer.state_dict(),
+                            "task_embedding":task_embedding.state_dict(),
+                            "senti_classifier": senti_classifier.state_dict(),
+                            "rmdModel":rdm_model.state_dict(),
+                            "rdm_classifier": rdm_classifier.state_dict()
+                        },
+                        rdm_save_as
+                    )
     #                 rdm_model, bert, sentiModel, rdm_classifier
             sum_acc = 0.0
             sum_loss = 0.0
@@ -618,7 +633,7 @@ else:
                         3, cuda=True, log_dir="SentiRDM"
                        )
 
-rdm_save_as = './SentiRDM/sentiRDMModel_epoch19.pkl'
+rdm_save_as = './SentiRDM/SentiRDM_best.pkl'
 if os.path.exists(rdm_save_as):
     checkpoint = torch.load(rdm_save_as)
     senti_cls.load_state_dict(checkpoint['senti_classifier'])
@@ -639,9 +654,9 @@ print("train rdm model with senti task is completed!")
 
 for i in range(20):
     if i==0:
-        TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, i, 0.5, 50000, "SentiERD/", None, FLAGS, cuda=True)
+        TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tt, i, 0.5, 50000, "SentiERD/", None, FLAGS, cuda=True)
     else:
-        TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, i, 0.5, 5000, "SentiERD/", None, FLAGS, cuda=True)
+        TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tt, i, 0.5, 5000, "SentiERD/", None, FLAGS, cuda=True)
     erd_save_as = './SentiERD/erdModel_epoch%03d.pkl'% (i)
     torch.save(
         {
@@ -652,7 +667,7 @@ for i in range(20):
         },
         erd_save_as
     )
-    s2vec = Sent2Vec_Generater(tokenizer, bert, cuda=True)
+    s2vec = Sent2Vec_Generater(tt, bert, cuda=True)
     new_len = get_new_len(s2vec, rdm_model, cm_model, FLAGS, cuda=True)
     print("after new len:")
     TrainRDMWithSenti(rdm_model, bert, rdm_classifier,

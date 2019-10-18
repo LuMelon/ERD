@@ -245,7 +245,7 @@ def MTLTrainRDMModel(rdm_model, bert, rdm_classifier,
 
     acc_tmp = np.zeros([3, int(batch_size/max_gpu_batch)])
     loss_tmp = np.zeros([4, int(batch_size/max_gpu_batch)])
-
+    best_valid_acc = 0.0
 
     for step in range(t_steps):
         optim.zero_grad()
@@ -342,19 +342,22 @@ def MTLTrainRDMModel(rdm_model, bert, rdm_classifier,
             )
             )
             if step%100 == 99:
-                rdm_save_as = './%s/rdmModel_epoch%03d.pkl'% (log_dir, step/100)
-                torch.save(
-                    {
-                        "bert":bert.state_dict(),
-                        "transformer":transformer.state_dict(),
-                        "task_embedding":task_embedding.state_dict(),
-                        "senti_classifier": senti_classifier.state_dict(),
-                        "subj_classifier": subj_classifier.state_dict(),
-                        "rmdModel":rdm_model.state_dict(),
-                        "rdm_classifier": rdm_classifier.state_dict()
-                    },
-                    rdm_save_as
-                )
+                valid_acc = accuracy_on_valid_data(bert, rdm_model, rdm_classifier, [], tokenizer)
+                if valid_acc > best_valid_acc:
+                    best_valid_acc = valid_acc
+                    rdm_save_as = './%s/MTLRDM_best.pkl'% (log_dir)
+                    torch.save(
+                        {
+                            "bert":bert.state_dict(),
+                            "transformer":transformer.state_dict(),
+                            "task_embedding":task_embedding.state_dict(),
+                            "senti_classifier": senti_classifier.state_dict(),
+                            "subj_classifier": subj_classifier.state_dict(),
+                            "rmdModel":rdm_model.state_dict(),
+                            "rdm_classifier": rdm_classifier.state_dict()
+                        },
+                        rdm_save_as
+                    )
     #                 rdm_model, bert, sentiModel, rdm_classifier
             sum_acc = 0.0
             sum_loss = 0.0
