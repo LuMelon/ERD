@@ -30,6 +30,10 @@ data = {}
 data_ID = []
 data_len = []
 data_y = []
+valid_data_ID = []
+valid_data_len = []
+valid_data_y = []
+
 reward_counter = 0
 eval_flag = 0
 
@@ -183,12 +187,15 @@ def load_test_data_fast():
     print("{} data loaded".format(len(data))) 
 
 def load_data_fast():
-    global data, data_ID, data_len, data_y, eval_flag
+    global data, data_ID, data_len, data_y, valid_data_ID, valid_data_y, valid_data_len
     with open("data/data_dict.txt", "rb") as handle:
         data = pickle.load(handle)
     data_ID = np.load("data/data_ID.npy").tolist()
     data_len = np.load("data/data_len.npy").tolist()
     data_y = np.load("data/data_y.npy").tolist()
+    valid_data_ID = np.load("data/valid_data_ID.npy").tolist()
+    valid_data_len = np.load("data/valid_data_len.npy").tolist()
+    valid_data_y = np.load("data/valid_data_y.npy").tolist()
     max_sent = max( map(lambda value: max(map(lambda txt_list: len(txt_list), value['text']) ), list(data.values()) ) )
     print("max_sent:", max_sent, ",  max_seq_len:", max(data_len))
     eval_flag = int(len(data_ID) / 4) * 3
@@ -257,6 +264,84 @@ FLAGS = adict(dic)
 # with open('data/senti_test_label.pickle', 'wb') as handle:
 #     pickle.dump(sentiReader.test_label, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
+
+def accuracy_on_valid_data(bert = None, rdm_model = None, rdm_classifier=None, new_data_len=[], tokenizer=None, cuda=True):
+    batchsize = 20
+    m_data_y = np.zeros([batchsize, 2], dtype=np.int32)
+    m_data_len = np.zeros([batchsize], dtype=np.int32)
+    data_x = [] #[batchsize, seq_len, sent_len]
+    if len(new_data_len) > 0:
+        t_data_len = new_data_len
+    else:
+        t_data_len = valid_data_len
+        
+    t_steps = int(len(valid_data_ID)/batchsize)
+    sum_acc = 0.0
+    
+    def rdm_data2bert_tensors(data_X, cuda):
+        def padding_sent_list(sent_list):
+            sent_len = [len(sent) for sent in sent_list]
+            max_sent_len = max(sent_len)
+            sent_padding = torch.zeros([len(sent_list), max_sent_len], dtype=torch.int64)
+            attn_mask = torch.ones_like(sent_padding)
+            for i, sent in enumerate(sent_list):
+                sent_padding[i][:len(sent)] = torch.tensor(sent, dtype=torch.int32)
+                attn_mask[i][len(sent):].fill_(0)
+            return sent_padding, attn_mask
+        sent_list = []
+        [sent_list.extend(seq) for seq in data_X]
+        seq_len = [len(seq) for seq in data_X]
+        sent_tensors, attn_mask = padding_sent_list(sent_list)
+        if cuda:
+            sent_tensors = sent_tensors.cuda()
+            attn_mask = attn_mask.cuda()
+        return sent_tensors, attn_mask, seq_len
+
+    def Count_Acc(ylabel, preds):
+        correct_preds = np.array(
+            [1 if y1==y2 else 0 
+            for (y1, y2) in zip(ylabel, preds)]
+        )
+        acc = sum(correct_preds) / (1.0 * len(ylabel))
+        return acc
+
+    for step in range(t_steps):
+        for i in range(batchsize):
+            m_data_y[i] = valid_data_y[step*batchsize + i]
+            m_data_len[i] = t_data_len[step*batchsize + i]
+            seq_x = [
+                tokenizer.encode(
+                    data[valid_data_ID[step*batchsize+i]]['text'][j],
+                    add_special_tokens=True
+                )
+                for j in range(t_data_len[step*batchsize+i])
+            ]
+            data_x.append(seq_x)
+        acc = 0.0 
+        if bert is not None and rdm_model is not None and rdm_classifier is not None:
+            with torch.no_grad():
+                sent_tensors, attn_mask, seq_len = rdm_data2bert_tensors(data_x, cuda)
+                bert_outs = bert(sent_tensors, attention_mask=attn_mask)
+                pooled_sents = [bert_outs[1][sum(seq_len[:idx]):sum(seq_len[:idx])+seq_len[idx]] for idx, s_len in enumerate(seq_len)]
+                data_tensors = rnn_utils.pad_sequence(pooled_sents, batch_first=True).unsqueeze(-2)
+                rdm_hiddens = rdm_model(data_tensors)
+                batch_size, _, _ = rdm_hiddens.shape
+                rdm_outs = torch.cat(
+                    [ rdm_hiddens[i][m_data_len[i]-1] for i in range(batch_size)] 
+                    # a list of tensor, where the ndim of tensor is 1 and the shape of tensor is [hidden_size]
+                ).reshape(
+                    [-1, rdm_model.hidden_dim]
+                )
+                rdm_scores = rdm_classifier(
+                    rdm_outs
+                )
+                rdm_preds = rdm_scores.argmax(axis=1)
+                y_label = torch.tensor(m_data_y).argmax(axis=1).cuda() if cuda else torch.tensor(m_data_y).argmax(axis=1)
+                acc = Count_Acc(y_label, rdm_preds)
+        data_x = []
+        sum_acc += acc
+    mean_acc = sum_acc / (1.0*t_steps)
+    return mean_acc
 
 # In[29]:
 
