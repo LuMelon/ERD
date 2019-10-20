@@ -476,7 +476,7 @@ def TrainRDMWithSenti(rdm_model, bert, rdm_classifier,
     senti_task_id = torch.tensor([0]) if not cuda else torch.tensor([0]).cuda()
     #-------------------------------------------------------------    
 
-    loss_weight = torch.tensor([0.9, 0.1]) if not cuda else torch.tensor([0.9, 0.1]).cuda()   
+    loss_weight = torch.tensor([0.95, 0.05]) if not cuda else torch.tensor([0.95, 0.05]).cuda()   
     optim = torch.optim.Adagrad([
                                 {'params': bert.parameters(), 'lr':5e-5},
                                 {'params': rdm_classifier.parameters(), 'lr': 5e-5},
@@ -678,7 +678,7 @@ if torch.cuda.device_count() > 1:
     transformer.to(device)
 
 
-log_dir = "SentiRDM"
+log_dir = "SentiRDM05"
 
 # #### 导入预训练模型
 joint_save_as = './%s/senti_best_Model.pkl'%log_dir

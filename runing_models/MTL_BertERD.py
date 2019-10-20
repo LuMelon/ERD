@@ -374,6 +374,203 @@ def TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, stage, t_
                 state[0][j].fill_(0)
         counter += 1
 
+def senti_cls_train(senti_reader, valid_reader,
+                    bert, transformer, task_embedding, senti_classifier,
+                    train_epochs, cuda=False, log_dir="SentiRDM"
+                   ):
+    optim = torch.optim.Adagrad([
+                                {'params': bert.parameters(), 'lr':1e-6},
+                                {'params': task_embedding.parameters(), 'lr':1e-5},
+                                {'params': transformer.parameters(), 'lr': 1e-5},
+                                {'params': senti_classifier.parameters(), 'lr': 1e-5}
+                             ]
+    )
+
+    #  senti loss graph 
+    #-----------------------------------------------------------
+    senti_weights = torch.tensor(
+            WeightsForUmbalanced(
+                senti_reader.label
+            ),
+            dtype=torch.float32
+    )
+    senti_loss_fn = nn.CrossEntropyLoss(weight=senti_weights.cuda()) if cuda else nn.CrossEntropyLoss(weight=senti_weights)
+    senti_task_id = torch.tensor([0]) if not cuda else torch.tensor([0]).cuda()
+    #-------------------------------------------------------------    
+    losses = np.zeros([10]) 
+    accs = np.zeros([10])
+    
+    writer = SummaryWriter(log_dir)
+    
+    task_emb = task_embedding(torch.tensor([0]).cuda()) if cuda else task_embedding(torch.tensor([0]))
+    
+    optim.zero_grad()
+    
+    step = 0
+    for epoch in range(train_epochs):
+        for xst, yst, lst in senti_reader.iter():
+            sent_tensors, sent_mask = senti_data2bert_tensors(xst, cuda)
+            xst_embs, _ = bert(sent_tensors, attention_mask = sent_mask)
+            tensors = xst_embs + task_embedding(senti_task_id)
+            senti_feature = transformer(tensors, attention_mask = sent_mask)
+            cls_feature = senti_feature[0][:, 0]
+            senti_scores = senti_cls(cls_feature)
+            y_label = torch.tensor(yst.argmax(axis=1)).cuda() if cuda else torch.tensor(yst.argmax(axis=1))
+            st_loss = senti_loss_fn(senti_scores, y_label)
+            st_acc = accuracy_score(yst.argmax(axis=1), senti_scores.cpu().argmax(axis=1))
+            optim.zero_grad()
+            st_loss.backward()
+            torch.cuda.empty_cache()
+            optim.step()
+            losses[int(step%10)] = st_loss.cpu()
+            accs[int(step%10)] = st_acc
+            print("step:%d | loss/acc = %.3f/%.3f"%(step, st_loss, st_acc))
+            writer.add_scalar('Train Loss', st_loss.cpu(), step)
+            writer.add_scalar('Train Accuracy', st_acc, step)
+            if step %10 == 9:
+                print('sentiment task: %6d: [%5d/%5d], senti_loss/senti_acc = %6.8f/%6.7f ' % ( step,
+                                                                                epoch, train_epochs,
+                                                                                losses.mean(), accs.mean(),
+                                                                            )
+                         )    
+            step += 1
+            
+        with torch.no_grad():
+            bs_cnt, bs, l_cnt = valid_reader.label.shape
+            preds = []
+            losses = np.zeros(bs_cnt)
+            it = 0
+            for xst, yst, lst in valid_reader.iter():
+                sent_tensors, sent_mask = senti_data2bert_tensors(xst, cuda)
+                xst_embs, _ = bert(sent_tensors, attention_mask = sent_mask)
+                tensors = xst_embs + task_embedding(senti_task_id)
+                senti_feature = transformer(tensors, attention_mask = sent_mask)
+                cls_feature = senti_feature[0][:, 0]
+                senti_scores = senti_cls(cls_feature)
+                y_label = torch.tensor(yst.argmax(axis=1)).cuda() if cuda else torch.tensor(yst.argmax(axis=1))
+                st_loss = senti_loss_fn(senti_scores, y_label)
+                st_acc = accuracy_score(yst.argmax(axis=1), senti_scores.cpu().argmax(axis=1))
+                losses[it] = st_loss
+                preds.append(senti_scores)
+                torch.cuda.empty_cache()
+            val_preds = torch.cat(preds).cpu()
+            val_acc = accuracy_score(valid_reader.label.reshape(bs_cnt*bs, l_cnt).argmax(axis=1), val_preds.argmax(axis=1))
+            val_loss = losses.mean()
+            writer.add_scalar('valid Loss', val_loss, epoch)
+            writer.add_scalar('valid Accuracy', val_acc, epoch)
+            print("valid loss/acc: %.6f/%.6f:"%(val_loss, val_acc))
+        senti_save_as = './%s/sentiModel_epoch%03d.pkl'% (log_dir, epoch)
+        torch.save(
+            {
+                "bert":bert.state_dict(),
+                "transformer":transformer.state_dict(),
+                "task_embedding":task_embedding.state_dict(),
+                "senti_classifier": senti_classifier.state_dict()
+            },
+            senti_save_as
+        )
+
+
+def subj_cls_train(subj_reader, valid_reader, 
+                   bert, transformer, task_embedding, subj_classifier, 
+                   train_epochs, cuda=False, log_dir="SubjRDM"
+                  ):
+    subj_weights = torch.tensor(
+            WeightsForUmbalanced(
+                subj_reader.label
+            ),
+            dtype = torch.float32
+    )
+    subj_loss_fn = nn.CrossEntropyLoss(weight=subj_weights) if not cuda else nn.CrossEntropyLoss(weight=subj_weights.cuda())
+
+    optim = torch.optim.Adagrad([
+                                {'params': bert.parameters(), 'lr':5e-5},
+                                {'params': task_embedding.parameters(), 'lr':5e-5},
+                                {'params': transformer.parameters(), 'lr': 5e-5},
+                                {'params': subj_classifier.parameters(), 'lr': 5e-5}
+                             ]
+    )
+    losses = np.zeros([10]) 
+    accs = np.zeros([10])
+    
+    writer = SummaryWriter(log_dir)
+    
+    subj_task_id = torch.tensor([1]).cuda() if cuda else torch.tensor([1])
+    best_valid_acc = 0.0
+    
+    optim.zero_grad()
+    for epoch in range(train_epochs):
+        step = 0
+        for xsj, ysj, lsj in subj_reader.iter():
+            sent_tensors, sent_mask = senti_data2bert_tensors(xsj, cuda)
+            xsj_embs, _ = bert(sent_tensors, attention_mask = sent_mask)
+            tensors = xsj_embs + task_embedding(subj_task_id)
+            subj_feature = transformer(tensors, attention_mask = sent_mask)
+            cls_feature = subj_feature[0][:, 0]
+            subj_scores = subj_cls(cls_feature)
+            y_label = torch.tensor(ysj.argmax(axis=1)).cuda() if cuda else torch.tensor(ysj.argmax(axis=1))
+            sj_loss = subj_loss_fn(subj_scores, y_label)
+            sj_acc = accuracy_score(ysj.argmax(axis=1), subj_scores.cpu().argmax(axis=1))
+            optim.zero_grad()
+            sj_loss.backward()
+            optim.step()
+            torch.cuda.empty_cache()
+            
+            losses[int(step%10)] = sj_loss.cpu()
+            accs[int(step%10)] = sj_acc
+            
+            print("step:%d | loss/acc = %.3f/%.3f"%(step, sj_loss, sj_acc))
+            writer.add_scalar('Train Loss', sj_loss.cpu(), step)
+            writer.add_scalar('Train Accuracy', sj_acc, step)
+            if step %10 == 9:
+                print('subjective task: %6d: [%5d/%5d], subj_loss/subj_acc = %6.8f/%6.7f ' % ( step,
+                                                                                epoch, train_epochs,
+                                                                                losses.mean(), accs.mean(),
+                                                                            )
+                         )
+                break
+            step += 1 
+        
+        with torch.no_grad():
+            bs_cnt, bs, l_cnt = valid_reader.label.shape
+            preds = []
+            losses = np.zeros(bs_cnt)
+            it = 0
+            for xsj, ysj, lsj in valid_reader.iter():
+                sent_tensors, sent_mask = senti_data2bert_tensors(xsj, cuda)
+                xsj_embs, _ = bert(sent_tensors, attention_mask = sent_mask)
+                tensors = xsj_embs + task_embedding(subj_task_id)
+                subj_feature = transformer(tensors, attention_mask = sent_mask)
+                cls_feature = subj_feature[0][:, 0]
+                subj_scores = subj_cls(cls_feature)
+                y_label = torch.tensor(ysj.argmax(axis=1)).cuda() if cuda else torch.tensor(ysj.argmax(axis=1))
+                sj_loss = subj_loss_fn(subj_scores, y_label)
+                sj_acc = accuracy_score(ysj.argmax(axis=1), subj_scores.cpu().argmax(axis=1))
+                losses[it] = sj_loss
+                preds.append(subj_scores)
+                torch.cuda.empty_cache()
+                it += 1
+            val_preds = torch.cat(preds).cpu()
+            val_acc = accuracy_score(valid_reader.label.reshape(bs_cnt*bs, l_cnt).argmax(axis=1), val_preds.argmax(axis=1))
+            val_loss = losses.mean()
+            writer.add_scalar('valid Loss', val_loss, epoch)
+            writer.add_scalar('valid Accuracy', val_acc, epoch)
+            print("valid loss/acc: %.6f/%.6f:"%(val_loss, val_acc))
+
+        if val_acc > best_valid_acc:
+            best_valid_acc = val_acc
+            print("best_valid_acc:", best_valid_acc)
+            subj_save_as = './%s/subj_best_Model.pkl'% (log_dir)
+            torch.save(
+                {
+                    "bert":bert.state_dict(),
+                    "transformer":transformer.state_dict(),
+                    "task_embedding":task_embedding.state_dict(),
+                    "subj_classifier": subj_classifier.state_dict(),
+                },
+                subj_save_as
+            )
+
 
 def MTLTrainRDMModel(rdm_model, bert, rdm_classifier,
                      transformer, task_embedding, senti_classifier, subj_classifier, 

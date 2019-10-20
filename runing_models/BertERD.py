@@ -310,6 +310,7 @@ def TrainRDMModel(rdm_model, bert, rdm_classifier,
                 valid_acc = accuracy_on_valid_data(bert, rdm_model, rdm_classifier, [], tokenizer)
                 if valid_acc > best_valid_acc:
                     print("valid_acc:", valid_acc)
+                    writer.add_scalar('Valid Accuracy', valid_acc, step)
                     best_valid_acc = valid_acc
                     rdm_save_as = './%s/BertRDM_best.pkl'% (log_dir)
                     torch.save(
@@ -500,33 +501,33 @@ if os.path.exists(pretrained_file):
     rdm_classifier.load_state_dict(checkpoint["rdm_classifier"])
 else:
     TrainRDMModel(rdm_model, bert, rdm_classifier, 
-                    tokenizer, 20000, stage=0, new_data_len=[], logger=None, 
+                    tokenizer, 2000, stage=0, new_data_len=[], logger=None, 
                         log_dir="BertRDM", cuda=True)
 
 
 
 # #### 标准ERD模型
-for i in range(20):
-    if i==0:
-        TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, i, 0.5, 50000, "BertERD/", None, FLAGS, cuda=True)
-    else:
-        TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, i, 0.5, 5000, "BertERD/", None, FLAGS, cuda=True)
-    erd_save_as = './BertERD/erdModel_epoch%03d.pkl'% (i)
-    torch.save(
-        {
-            "bert":bert.state_dict(),
-            "rmdModel":rdm_model.state_dict(),
-            "rdm_classifier": rdm_classifier.state_dict(),
-            "cm_model":cm_model.state_dict()
-        },
-        erd_save_as
-    )
-    s2vec = Sent2Vec_Generater(tokenizer, bert, cuda=True)
-    new_len = get_new_len(s2vec, rdm_model, cm_model, FLAGS, cuda=True)
-    print("after new len:")
-    TrainRDMModel(rdm_model, bert, rdm_classifier, 
-                    tokenizer, i, 1000, new_data_len=new_len, logger=None, 
-                        log_dir="BertERD_%d"%i)
+# for i in range(20):
+#     if i==0:
+#         TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, i, 0.5, 50000, "BertERD/", None, FLAGS, cuda=True)
+#     else:
+#         TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, i, 0.5, 5000, "BertERD/", None, FLAGS, cuda=True)
+#     erd_save_as = './BertERD/erdModel_epoch%03d.pkl'% (i)
+#     torch.save(
+#         {
+#             "bert":bert.state_dict(),
+#             "rmdModel":rdm_model.state_dict(),
+#             "rdm_classifier": rdm_classifier.state_dict(),
+#             "cm_model":cm_model.state_dict()
+#         },
+#         erd_save_as
+#     )
+#     s2vec = Sent2Vec_Generater(tokenizer, bert, cuda=True)
+#     new_len = get_new_len(s2vec, rdm_model, cm_model, FLAGS, cuda=True)
+#     print("after new len:")
+#     TrainRDMModel(rdm_model, bert, rdm_classifier, 
+#                     tokenizer, i, 1000, new_data_len=new_len, logger=None, 
+#                         log_dir="BertERD_%d"%i)
 
 
 # In[ ]:
