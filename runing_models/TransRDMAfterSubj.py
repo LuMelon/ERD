@@ -484,9 +484,7 @@ def TrainRDMWithSubj(rdm_model, bert, rdm_classifier,
                                 {'params': bert.parameters(), 'lr':5e-5},
                                 {'params': rdm_classifier.parameters(), 'lr': 5e-3},
                                 {'params': rdm_model.parameters(), 'lr': 5e-3},
-                                {'params': task_embedding.parameters(), 'lr':5e-5},
-                                {'params': transformer.parameters(), 'lr': 5e-5},
-                                {'params': subj_classifier.parameters(), 'lr': 5e-5}
+                                {'params': transformer.parameters(), 'lr': 5e-3},
                              ]
     )
 
@@ -506,8 +504,10 @@ def TrainRDMWithSubj(rdm_model, bert, rdm_classifier,
             else:
                 x, x_len, y = get_df_batch(step*batch_size+j*max_gpu_batch, max_gpu_batch, tokenizer=tokenizer) 
             sent_tensors, attn_mask, seq_len = rdm_data2bert_tensors(x, cuda)
-            bert_outs = bert(sent_tensors, attention_mask=attn_mask)
-            pooled_sents = [bert_outs[1][sum(seq_len[:idx]):sum(seq_len[:idx])+seq_len[idx]] for idx, s_len in enumerate(seq_len)]
+            sent_outs, _ = bert(sent_tensors, attention_mask=attn_mask)
+            trans_outs = transformer(sent_outs, attention_mask=attn_mask)[0][:, 0, :]
+            pooled_sents = [trans_outs[sum(seq_len[:idx]):sum(seq_len[:idx])+seq_len[idx]] for idx, s_len in enumerate(seq_len)]
+
             data_tensors = rnn_utils.pad_sequence(pooled_sents, batch_first=True).unsqueeze(-2)
             rdm_hiddens = rdm_model(data_tensors)
             batchsize, _, _ = rdm_hiddens.shape
@@ -525,27 +525,24 @@ def TrainRDMWithSubj(rdm_model, bert, rdm_classifier,
             y_label = torch.tensor(y).argmax(axis=1).cuda() if cuda else torch.tensor(y).argmax(axis=1)
             acc, _, _, _, _, _, _ = Count_Accs(y_label, rdm_preds)
             loss = loss_fn(rdm_scores, y_label)
-            loss_back = loss.mean()*loss_weight[0]
-            loss_back.backward()
             torch.cuda.empty_cache()
             #----------------------------------------------------------------------
 
             # ----------------subjective analysis------------------------
-            xsj, ysj, lsj = subjReader.sample()
-            sent_tensors, sent_mask = senti_data2bert_tensors(xsj, cuda)
-            xsj_embs, _ = bert(sent_tensors, attention_mask = sent_mask)
-            tensors = xsj_embs + task_embedding(subj_task_id)
-            subj_feature = transformer(tensors, attention_mask = sent_mask)
-            cls_feature = subj_feature[0][:, 0]
-            subj_scores = subj_cls(cls_feature)
-            y_label = torch.tensor(ysj.argmax(axis=1)).cuda() if cuda else torch.tensor(ysj.argmax(axis=1))
-            sj_loss = subj_loss_fn(subj_scores, y_label)
-            sj_acc = accuracy_score(ysj.argmax(axis=1), subj_scores.cpu().argmax(axis=1))
-            sj_loss_back = sj_loss*loss_weight[1]
-            sj_loss_back.backward()
+            with torch.no_grad():
+                xsj, ysj, lsj = subjReader.sample()
+                sent_tensors, sent_mask = senti_data2bert_tensors(xsj, cuda)
+                xsj_embs, _ = bert(sent_tensors, attention_mask = sent_mask)
+                tensors = xsj_embs + task_embedding(subj_task_id)
+                subj_feature = transformer(tensors, attention_mask = sent_mask)
+                cls_feature = subj_feature[0][:, 0]
+                subj_scores = subj_cls(cls_feature)
+                y_label = torch.tensor(ysj.argmax(axis=1)).cuda() if cuda else torch.tensor(ysj.argmax(axis=1))
+                sj_loss = subj_loss_fn(subj_scores, y_label)
+                sj_acc = accuracy_score(ysj.argmax(axis=1), subj_scores.cpu().argmax(axis=1))
             torch.cuda.empty_cache()
             #-----------------------------------------------------------
-            loss_tmp[:, j] = np.array([loss_back+sj_loss_back, loss.mean(), sj_loss.mean()])
+            loss_tmp[:, j] = np.array([loss+sj_loss, loss.mean(), sj_loss.mean()])
             acc_tmp[:, j] = np.array([acc.mean(), sj_acc.mean()])
             torch.cuda.empty_cache()
 
@@ -582,13 +579,11 @@ def TrainRDMWithSubj(rdm_model, bert, rdm_classifier,
                 if valid_acc > best_valid_acc:
                     best_valid_acc = valid_acc
                     print("best valid_acc:", best_valid_acc)
-                    rdm_save_as = './%s/SubjRDM_best.pkl'% (log_dir)
+                    rdm_save_as = './%s/TransRDMAfterSubj_best.pkl'% (log_dir)
                     torch.save(
                         {
                             "bert":bert.state_dict(),
                             "transformer":transformer.state_dict(),
-                            "task_embedding":task_embedding.state_dict(),
-                            "subj_classifier": subj_classifier.state_dict(),
                             "rmdModel":rdm_model.state_dict(),
                             "rdm_classifier": rdm_classifier.state_dict()
                         },
@@ -678,9 +673,9 @@ transformer.to(device)
 
 # In[8]:
 
-log_dir = "SubjRDM"
+log_dir = "TransRDMAfterSubj"
 
-joint_save_as = './%s/subj_best_Model.pkl'%log_dir
+joint_save_as = './SubjRDM/subj_best_Model.pkl'
 if os.path.exists(joint_save_as):
     checkpoint = torch.load(joint_save_as)
     bert.module.load_state_dict(checkpoint['bert'])
@@ -693,35 +688,27 @@ else:
                2, cuda=True, log_dir=log_dir
               )
 
-rdm_save_as = './%s/SubjRDM_best.pkl'%log_dir
+rdm_save_as = './%s/TransRDMAfterSubj_best.pkl'%log_dir
 if os.path.exists(rdm_save_as):
     checkpoint = torch.load(rdm_save_as)
     bert.load_state_dict(checkpoint['bert'])
     transformer.load_state_dict(checkpoint['transformer'])
-    task_embedding.load_state_dict(checkpoint['task_embedding'])
-    subj_cls.load_state_dict(checkpoint['subj_classifier'])
     rdm_model.load_state_dict(checkpoint['rmdModel'])
     rdm_classifier.load_state_dict(checkpoint["rdm_classifier"])
 else:
     TrainRDMWithSubj(rdm_model, bert, rdm_classifier,
                          transformer, task_embedding, subj_cls, 
                          subj_train_reader, 
-                        tt, 2000, new_data_len=[], logger=None, cuda=True, 
+                        tt, 4000, new_data_len=[], logger=None, cuda=True, 
                             log_dir= log_dir)
 
 print("train rdm model with subj task is completed!")
 
 # for i in range(20):
 #     if i==0:
-<<<<<<< HEAD
 #         TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tt, i, 0.5, 5000, "SubjERD/", None, FLAGS, cuda=True)
 #     else:
 #         TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tt, i, 0.5, 1000, "SubjERD/", None, FLAGS, cuda=True)
-=======
-#         TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tt, i, 0.5, 50000, "SubjERD/", None, FLAGS, cuda=True)
-#     else:
-#         TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tt, i, 0.5, 5000, "SubjERD/", None, FLAGS, cuda=True)
->>>>>>> ba55d7fadfffe427b74f1f4a9c7951224f398387
 #     erd_save_as = './SubjERD/erdModel_epoch%03d.pkl'% (i)
 #     torch.save(
 #         {
@@ -738,11 +725,7 @@ print("train rdm model with subj task is completed!")
 #     TrainRDMWithSubj(rdm_model, bert, rdm_classifier,
 #                      transformer, task_embedding, subj_cls, 
 #                      subj_train_reader, 
-<<<<<<< HEAD
 #                     tt, 500, new_data_len=[], logger=None, cuda=True, 
-=======
-#                     tt, 1000, new_data_len=[], logger=None, cuda=True, 
->>>>>>> ba55d7fadfffe427b74f1f4a9c7951224f398387
 #                         log_dir="SubjERD_%d"%i)
 
 

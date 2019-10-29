@@ -483,10 +483,7 @@ def TrainRDMWithSubj(rdm_model, bert, rdm_classifier,
     optim = torch.optim.Adagrad([
                                 {'params': bert.parameters(), 'lr':5e-5},
                                 {'params': rdm_classifier.parameters(), 'lr': 5e-3},
-                                {'params': rdm_model.parameters(), 'lr': 5e-3},
-                                {'params': task_embedding.parameters(), 'lr':5e-5},
-                                {'params': transformer.parameters(), 'lr': 5e-5},
-                                {'params': subj_classifier.parameters(), 'lr': 5e-5}
+                                {'params': rdm_model.parameters(), 'lr': 5e-3}
                              ]
     )
 
@@ -525,27 +522,25 @@ def TrainRDMWithSubj(rdm_model, bert, rdm_classifier,
             y_label = torch.tensor(y).argmax(axis=1).cuda() if cuda else torch.tensor(y).argmax(axis=1)
             acc, _, _, _, _, _, _ = Count_Accs(y_label, rdm_preds)
             loss = loss_fn(rdm_scores, y_label)
-            loss_back = loss.mean()*loss_weight[0]
-            loss_back.backward()
+            loss.backward()
             torch.cuda.empty_cache()
             #----------------------------------------------------------------------
 
             # ----------------subjective analysis------------------------
-            xsj, ysj, lsj = subjReader.sample()
-            sent_tensors, sent_mask = senti_data2bert_tensors(xsj, cuda)
-            xsj_embs, _ = bert(sent_tensors, attention_mask = sent_mask)
-            tensors = xsj_embs + task_embedding(subj_task_id)
-            subj_feature = transformer(tensors, attention_mask = sent_mask)
-            cls_feature = subj_feature[0][:, 0]
-            subj_scores = subj_cls(cls_feature)
-            y_label = torch.tensor(ysj.argmax(axis=1)).cuda() if cuda else torch.tensor(ysj.argmax(axis=1))
-            sj_loss = subj_loss_fn(subj_scores, y_label)
-            sj_acc = accuracy_score(ysj.argmax(axis=1), subj_scores.cpu().argmax(axis=1))
-            sj_loss_back = sj_loss*loss_weight[1]
-            sj_loss_back.backward()
+            with torch.no_grad():
+                xsj, ysj, lsj = subjReader.sample()
+                sent_tensors, sent_mask = senti_data2bert_tensors(xsj, cuda)
+                xsj_embs, _ = bert(sent_tensors, attention_mask = sent_mask)
+                tensors = xsj_embs + task_embedding(subj_task_id)
+                subj_feature = transformer(tensors, attention_mask = sent_mask)
+                cls_feature = subj_feature[0][:, 0]
+                subj_scores = subj_cls(cls_feature)
+                y_label = torch.tensor(ysj.argmax(axis=1)).cuda() if cuda else torch.tensor(ysj.argmax(axis=1))
+                sj_loss = subj_loss_fn(subj_scores, y_label)
+                sj_acc = accuracy_score(ysj.argmax(axis=1), subj_scores.cpu().argmax(axis=1))
             torch.cuda.empty_cache()
             #-----------------------------------------------------------
-            loss_tmp[:, j] = np.array([loss_back+sj_loss_back, loss.mean(), sj_loss.mean()])
+            loss_tmp[:, j] = np.array([loss+sj_loss, loss.mean(), sj_loss.mean()])
             acc_tmp[:, j] = np.array([acc.mean(), sj_acc.mean()])
             torch.cuda.empty_cache()
 
@@ -594,6 +589,7 @@ def TrainRDMWithSubj(rdm_model, bert, rdm_classifier,
                         },
                         rdm_save_as
                     )
+                    
     #                 rdm_model, bert, sentiModel, rdm_classifier
             sum_acc = 0.0
             sum_loss = 0.0
@@ -678,9 +674,9 @@ transformer.to(device)
 
 # In[8]:
 
-log_dir = "SubjRDM"
+log_dir = "RDMNoSubj"
 
-joint_save_as = './%s/subj_best_Model.pkl'%log_dir
+joint_save_as = './SubjRDM/subj_best_Model.pkl'
 if os.path.exists(joint_save_as):
     checkpoint = torch.load(joint_save_as)
     bert.module.load_state_dict(checkpoint['bert'])
@@ -713,15 +709,9 @@ print("train rdm model with subj task is completed!")
 
 # for i in range(20):
 #     if i==0:
-<<<<<<< HEAD
 #         TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tt, i, 0.5, 5000, "SubjERD/", None, FLAGS, cuda=True)
 #     else:
 #         TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tt, i, 0.5, 1000, "SubjERD/", None, FLAGS, cuda=True)
-=======
-#         TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tt, i, 0.5, 50000, "SubjERD/", None, FLAGS, cuda=True)
-#     else:
-#         TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tt, i, 0.5, 5000, "SubjERD/", None, FLAGS, cuda=True)
->>>>>>> ba55d7fadfffe427b74f1f4a9c7951224f398387
 #     erd_save_as = './SubjERD/erdModel_epoch%03d.pkl'% (i)
 #     torch.save(
 #         {
@@ -738,11 +728,7 @@ print("train rdm model with subj task is completed!")
 #     TrainRDMWithSubj(rdm_model, bert, rdm_classifier,
 #                      transformer, task_embedding, subj_cls, 
 #                      subj_train_reader, 
-<<<<<<< HEAD
 #                     tt, 500, new_data_len=[], logger=None, cuda=True, 
-=======
-#                     tt, 1000, new_data_len=[], logger=None, cuda=True, 
->>>>>>> ba55d7fadfffe427b74f1f4a9c7951224f398387
 #                         log_dir="SubjERD_%d"%i)
 
 

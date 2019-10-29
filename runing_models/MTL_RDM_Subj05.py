@@ -695,7 +695,11 @@ else:
 
 rdm_save_as = './%s/SubjRDM_best.pkl'%log_dir
 if os.path.exists(rdm_save_as):
+<<<<<<< HEAD
+    checkpoint = torch.load(joint_save_as)
+=======
     checkpoint = torch.load(rdm_save_as)
+>>>>>>> ba55d7fadfffe427b74f1f4a9c7951224f398387
     bert.load_state_dict(checkpoint['bert'])
     transformer.load_state_dict(checkpoint['transformer'])
     task_embedding.load_state_dict(checkpoint['task_embedding'])

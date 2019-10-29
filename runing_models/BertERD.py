@@ -2,7 +2,9 @@
 # coding: utf-8
 
 # In[1]:
+import sys
 
+sys.path.append(".")
 
 from logger import MyLogger
 import time
@@ -25,9 +27,6 @@ import torch.nn.utils.rnn as rnn_utils
 import tsentiLoader
 import pickle
 import tqdm
-import sys
-
-
 
 import os
 assert(len(sys.argv)==2)
@@ -237,7 +236,7 @@ def TrainRDMModel(rdm_model, bert, rdm_classifier,
     weight = torch.tensor([2.0, 1.0], dtype=torch.float32).cuda()
     loss_fn = nn.CrossEntropyLoss(weight=weight)
     optim = torch.optim.Adagrad([
-                                {'params': bert.parameters(), 'lr':5e-5},
+                                {'params': bert.parameters(), 'lr':1e-4},
                                 {'params': rdm_classifier.parameters(), 'lr': 5e-3},
                                 {'params': rdm_model.parameters(), 'lr': 5e-3}
                              ]
@@ -279,6 +278,7 @@ def TrainRDMModel(rdm_model, bert, rdm_classifier,
                 loss.backward()
                 torch.cuda.empty_cache()
                 loss_l[j] = loss
+                acc_l[j] = acc
 #                 print("%d, %d | x_len:"%(step, j), x_len)
         except RuntimeError as exception:
             if "out of memory" in str(exception):
@@ -312,7 +312,7 @@ def TrainRDMModel(rdm_model, bert, rdm_classifier,
                     print("valid_acc:", valid_acc)
                     writer.add_scalar('Valid Accuracy', valid_acc, step)
                     best_valid_acc = valid_acc
-                    rdm_save_as = './%s/BertRDM_best.pkl'% (log_dir)
+                    rdm_save_as = '%s/BertRDM_best.pkl'% (log_dir)
                     torch.save(
                         {
                             "bert":bert.state_dict(),
@@ -484,6 +484,8 @@ rdm_classifier = nn.Linear(256, 2).cuda()
 cm_log_dir="CMBertTrain"
 
 
+log_dir = os.path.join(sys.path[0], "BertRDM/")
+
 if torch.cuda.device_count() > 1:
     # device_ids = [int(device_id) for device_id in sys.argv[1].split(",")]
     device_ids = list( range( len( sys.argv[1].split(",") ) ) )
@@ -493,7 +495,7 @@ if torch.cuda.device_count() > 1:
     bert.to(device)
 
 # #### 导入模型预训练参数
-pretrained_file = "./BertRDM/BertRDM_best.pkl"
+pretrained_file = "%s/BertRDM_best.pkl"%log_dir
 if os.path.exists(pretrained_file):
     checkpoint = torch.load(pretrained_file)
     bert.load_state_dict(checkpoint['bert'])
@@ -502,11 +504,12 @@ if os.path.exists(pretrained_file):
 else:
     TrainRDMModel(rdm_model, bert, rdm_classifier, 
                     tokenizer, 2000, stage=0, new_data_len=[], logger=None, 
-                        log_dir="BertRDM", cuda=True)
+                        log_dir=log_dir, cuda=True)
 
 
 
 # #### 标准ERD模型
+
 # for i in range(20):
 #     if i==0:
 #         TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, i, 0.5, 50000, "BertERD/", None, FLAGS, cuda=True)
@@ -528,7 +531,6 @@ else:
 #     TrainRDMModel(rdm_model, bert, rdm_classifier, 
 #                     tokenizer, i, 1000, new_data_len=new_len, logger=None, 
 #                         log_dir="BertERD_%d"%i)
-
 
 # In[ ]:
 

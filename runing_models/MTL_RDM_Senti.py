@@ -92,39 +92,11 @@ class RDM_Model(nn.Module):
         # return hidden_outs, final_outs
         return df_outputs
 
-class CM_Model(nn.Module):
-    def __init__(self, sentence_embedding_dim, hidden_dim, action_num):
-        super(CM_Model, self).__init__()
-        self.sentence_embedding_dim = sentence_embedding_dim
-        self.hidden_dim = hidden_dim
-        self.action_num = action_num
-#         self.PoolLayer = pooling_layer(self.embedding_dim, 
-#                                             self.hidden_dim)
-        self.DenseLayer = nn.Linear(self.hidden_dim, 64)
-        self.Classifier = nn.Linear(64, self.action_num)
-        
-    def forward(self, rdm_model, rl_input, rl_state):
-        """
-        rl_input: [batchsize, max_word_num, sentence_embedding_dim]
-        rl_state: [1, batchsize, hidden_dim]
-        """
-        assert(rl_input.ndim==3)
-        batchsize, max_word_num, embedding_dim = rl_input.shape
-        rl_output, rl_new_state = rdm_model.gru_model(
-                                            rl_input, 
-                                            rl_state
-                                        )
-        rl_h1 = nn.functional.relu(
-            self.DenseLayer(
-#                 rl_state.reshape([len(rl_input), self.hidden_dim]) #it is not sure to take rl_state , rather than rl_output, as the feature
-                rl_output.reshape(
-                    [len(rl_input), self.hidden_dim]
-                )
-            )
-        )
-        stopScore = self.Classifier(rl_h1)
-        isStop = stopScore.argmax(axis=1)
-        return stopScore, isStop, rl_new_state
+
+# In[3]:
+
+
+
 
 def Count_Accs(ylabel, preds):
     correct_preds = np.array(
@@ -168,17 +140,6 @@ def WeightsForUmbalanced(data_label):
 
 # In[4]:
 
-def Sent2Vec_Generater(tokenizer, bert, cuda):
-    def fn(sentence):
-        input_ids = tokenizer.encode(
-                            sentence,
-                            add_special_tokens=True
-                        )
-        input_ids = torch.tensor([input_ids]).cuda() if cuda else torch.tensor([input_ids])
-        outs = bert(input_ids)
-        sentence_emb = outs[1].reshape([1, 1,-1])
-        return sentence_emb
-    return fn
 
 # x_new = [sent1, sent2, sent3, ...]　
 # x_new -> x_old_emb [batchsize, seq_len, sent_emb]：#使用seq_info 将sent组装回去
@@ -215,7 +176,6 @@ def senti_data2bert_tensors(sent_list, cuda):
         attn_mask = attn_mask.cuda()
     return sent_padding, attn_mask
 
-
 def senti_cls_train(senti_reader, valid_reader,
                     bert, transformer, task_embedding, senti_classifier,
                     train_epochs, cuda=False, log_dir="SentiRDM"
@@ -227,18 +187,6 @@ def senti_cls_train(senti_reader, valid_reader,
                                 {'params': senti_classifier.parameters(), 'lr': 1e-5}
                              ]
     )
-
-    #  senti loss graph 
-    #-----------------------------------------------------------
-    senti_weights = torch.tensor(
-            WeightsForUmbalanced(
-                senti_reader.label
-            ),
-            dtype=torch.float32
-    )
-    senti_loss_fn = nn.CrossEntropyLoss(weight=senti_weights.cuda()) if cuda else nn.CrossEntropyLoss(weight=senti_weights)
-    senti_task_id = torch.tensor([0]) if not cuda else torch.tensor([0]).cuda()
-    #-------------------------------------------------------------    
     losses = np.zeros([10]) 
     accs = np.zeros([10])
     best_valid_acc = 0
@@ -440,6 +388,7 @@ def TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, stage, t_
                 state[0][j].fill_(0)
         counter += 1
 
+>>>>>>> ba55d7fadfffe427b74f1f4a9c7951224f398387
 
 def TrainRDMWithSenti(rdm_model, bert, rdm_classifier,
                      transformer, task_embedding, senti_classifier, 
@@ -476,9 +425,9 @@ def TrainRDMWithSenti(rdm_model, bert, rdm_classifier,
     senti_task_id = torch.tensor([0]) if not cuda else torch.tensor([0]).cuda()
     #-------------------------------------------------------------    
 
-    loss_weight = torch.tensor([0.9, 0.1]) if not cuda else torch.tensor([0.9, 0.1]).cuda()   
+    loss_weight = torch.tensor([0.8, 0.2]) if not cuda else torch.tensor([0.8, 0.2]).cuda()   
     optim = torch.optim.Adagrad([
-                                {'params': bert.parameters(), 'lr':5e-5},
+                                {'params': bert.parameters(), 'lr':5e-7},
                                 {'params': rdm_classifier.parameters(), 'lr': 5e-5},
                                 {'params': rdm_model.parameters(), 'lr': 5e-5},
                                 {'params': task_embedding.parameters(), 'lr':1e-6},
@@ -491,8 +440,7 @@ def TrainRDMWithSenti(rdm_model, bert, rdm_classifier,
     acc_tmp = np.zeros([2, int(batch_size/max_gpu_batch)])
     loss_tmp = np.zeros([3, int(batch_size/max_gpu_batch)])
 
-    best_valid_acc = 0.0
-    for step in range(90, t_steps):
+    for step in range(t_steps):
         optim.zero_grad()
         for j in range(int(batch_size/max_gpu_batch)):
             # RDM loss 用的是bert的pooled emb，　其它模型用的是cls emb
@@ -604,20 +552,6 @@ def TrainRDMWithSenti(rdm_model, bert, rdm_classifier,
 
 # In[11]:
 
-with open("config.json", "r") as cr:
-    dic = json.load(cr)
-
-class adict(dict):
-    ''' Attribute dictionary - a convenience data structure, similar to SimpleNamespace in python 3.3
-        One can use attributes to read/write dictionary content.
-    '''
-    def __init__(self, *av, **kav):
-        dict.__init__(self, *av, **kav)
-        self.__dict__ = self
-
-FLAGS = adict(dic)
-
-
 
 tt = BertTokenizer.from_pretrained("./bertModel/")
 bb = BertModel.from_pretrained("./bertModel/")
@@ -649,7 +583,7 @@ task_embedding = task_embedding.cuda()
 senti_cls = nn.Linear(768, 2).cuda()
 rdm_model = RDM_Model(768, 300, 256, 0.2).cuda()
 rdm_classifier = nn.Linear(256, 2).cuda()
-cm_model = CM_Model(300, 256, 2).cuda()
+
 
 # In[13]:
 
@@ -666,6 +600,19 @@ senti_valid_reader.label = np.delete(senti_valid_reader.label, 1, axis=2)
 
 load_data_fast()
 
+
+# In[14]:
+
+
+# #### 导入预训练模型
+joint_save_as = './MTLTrain/jointModel_epoch015.pkl'
+checkpoint = torch.load(joint_save_as)
+senti_cls.load_state_dict(checkpoint['senti_classifier'])
+bert.load_state_dict(checkpoint['bert'])
+transformer.load_state_dict(checkpoint['transformer'])
+task_embedding.load_state_dict(checkpoint['task_embedding'])
+
+
 if torch.cuda.device_count() > 1:
     # device_ids = [int(device_id) for device_id in sys.argv[1].split(",")]
     device_ids = list( range( len( sys.argv[1].split(",") ) ) )
@@ -676,8 +623,7 @@ if torch.cuda.device_count() > 1:
     device = torch.device(device_name)
     bert.to(device)
     transformer.to(device)
-
-
+    
 log_dir = "SentiRDM"
 
 # #### 导入预训练模型
@@ -735,6 +681,7 @@ print("train rdm model with senti task is completed!")
 #                      senti_train_reader,
 #                     tt, 1000, new_data_len=[], logger=None, cuda=True, 
 #                         log_dir="SentiERD_%d"%i)
+>>>>>>> ba55d7fadfffe427b74f1f4a9c7951224f398387
 
 
 
