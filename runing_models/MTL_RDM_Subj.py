@@ -714,9 +714,15 @@ print("train rdm model with subj task is completed!")
 # for i in range(20):
 #     if i==0:
 <<<<<<< HEAD
+<<<<<<< HEAD
 #         TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tt, i, 0.5, 5000, "SubjERD/", None, FLAGS, cuda=True)
 #     else:
 #         TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tt, i, 0.5, 1000, "SubjERD/", None, FLAGS, cuda=True)
+=======
+#         TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tt, i, 0.5, 50000, "SubjERD/", None, FLAGS, cuda=True)
+#     else:
+#         TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tt, i, 0.5, 5000, "SubjERD/", None, FLAGS, cuda=True)
+>>>>>>> ba55d7fadfffe427b74f1f4a9c7951224f398387
 =======
 #         TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tt, i, 0.5, 50000, "SubjERD/", None, FLAGS, cuda=True)
 #     else:
@@ -739,7 +745,11 @@ print("train rdm model with subj task is completed!")
 #                      transformer, task_embedding, subj_cls, 
 #                      subj_train_reader, 
 <<<<<<< HEAD
+<<<<<<< HEAD
 #                     tt, 500, new_data_len=[], logger=None, cuda=True, 
+=======
+#                     tt, 1000, new_data_len=[], logger=None, cuda=True, 
+>>>>>>> ba55d7fadfffe427b74f1f4a9c7951224f398387
 =======
 #                     tt, 1000, new_data_len=[], logger=None, cuda=True, 
 >>>>>>> ba55d7fadfffe427b74f1f4a9c7951224f398387

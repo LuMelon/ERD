@@ -507,9 +507,7 @@ else:
                         log_dir=log_dir, cuda=True)
 
 
-
 # #### 标准ERD模型
-
 # for i in range(20):
 #     if i==0:
 #         TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, i, 0.5, 50000, "BertERD/", None, FLAGS, cuda=True)

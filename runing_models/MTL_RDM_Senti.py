@@ -176,6 +176,10 @@ def senti_data2bert_tensors(sent_list, cuda):
         attn_mask = attn_mask.cuda()
     return sent_padding, attn_mask
 
+<<<<<<< HEAD
+=======
+
+>>>>>>> ba55d7fadfffe427b74f1f4a9c7951224f398387
 def senti_cls_train(senti_reader, valid_reader,
                     bert, transformer, task_embedding, senti_classifier,
                     train_epochs, cuda=False, log_dir="SentiRDM"
@@ -623,7 +627,12 @@ if torch.cuda.device_count() > 1:
     device = torch.device(device_name)
     bert.to(device)
     transformer.to(device)
+<<<<<<< HEAD
     
+=======
+
+
+>>>>>>> ba55d7fadfffe427b74f1f4a9c7951224f398387
 log_dir = "SentiRDM"
 
 # #### 导入预训练模型
@@ -681,6 +690,9 @@ print("train rdm model with senti task is completed!")
 #                      senti_train_reader,
 #                     tt, 1000, new_data_len=[], logger=None, cuda=True, 
 #                         log_dir="SentiERD_%d"%i)
+<<<<<<< HEAD
+>>>>>>> ba55d7fadfffe427b74f1f4a9c7951224f398387
+=======
 >>>>>>> ba55d7fadfffe427b74f1f4a9c7951224f398387
 
 
