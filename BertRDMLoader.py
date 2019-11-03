@@ -433,9 +433,8 @@ def get_reward(isStop, ss, pys, ids, seq_ids):
     for i in range(len(isStop)):
         if isStop[i] == 1:
             if pys[ids[i]][seq_ids[i]-1].argmax() == np.argmax(data_y[ids[i]]):
-                # 在这个位置停止之后，如果使用这个位置的输出来判定，确实是与标签一致，那么就奖励
                 reward_counter += 1 # more number of correct prediction, more rewards
-                r = 1 + FLAGS.reward_rate * math.log(reward_counter)
+                r = 1 + min(FLAGS.reward_rate * math.log(reward_counter), 10)
                 reward[i] = r   
             else:
                 reward[i] = -100
@@ -535,7 +534,7 @@ def get_new_len(tokenizer, bert, rdm_model, cm_model, FLAGS, cuda):
             new_len.extend([iS.argmax()+1 if iS.argmax() <= x_len[i] and iS.max() ==1 else x_len[i] for i, iS in enumerate(isStop)])
     print("max_new_len:", max(new_len))
     print("mean_new_len:", sum(new_len)*1.0/len(new_len))
-    return new_len
+    return new_len[:len(data_len)]
 #　先计算一个批次，这个批次会改变，直到不能再变
 # 有两种情况需要改变:
 #   第一，某个序列经过ｃｍ模型判定，他可以停止了
