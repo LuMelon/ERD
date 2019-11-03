@@ -14,11 +14,7 @@ import random
 import math
 import re
 import pickle
-
-
-# In[2]:
-
-
+import torch.nn as nn
 import torch.nn.utils.rnn as rnn_utils
 
 
@@ -193,9 +189,12 @@ def load_data_fast():
     data_ID = np.load("data/data_ID.npy").tolist()
     data_len = np.load("data/data_len.npy").tolist()
     data_y = np.load("data/data_y.npy").tolist()
-    valid_data_ID = np.load("data/valid_data_ID.npy").tolist()
-    valid_data_len = np.load("data/valid_data_len.npy").tolist()
-    valid_data_y = np.load("data/valid_data_y.npy").tolist()
+    # valid_data_ID = np.load("data/valid_data_ID.npy").tolist()
+    # valid_data_len = np.load("data/valid_data_len.npy").tolist()
+    # valid_data_y = np.load("data/valid_data_y.npy").tolist()
+    valid_data_ID = np.load("data/test_data_ID.npy").tolist()
+    valid_data_len = np.load("data/test_data_len.npy").tolist()
+    valid_data_y = np.load("data/test_data_y.npy").tolist()
     max_sent = max( map(lambda value: max(map(lambda txt_list: len(txt_list), value['text']) ), list(data.values()) ) )
     print("max_sent:", max_sent, ",  max_seq_len:", max(data_len))
     eval_flag = int(len(data_ID) / 4) * 3
@@ -391,6 +390,7 @@ def get_rl_batch(ids, seq_states, stop_states, counter_id, start_id, FLAGS, toke
         # seq_states:records the id of a sentence in a sequence
         # stop_states: records whether the sentence is judged by the program
         if stop_states[i] == 1 or seq_states[i] >= data_len[ids[i]]: 
+            # stop之后, 要换一个新的序列，新序列的下标也要重新进行标记，从头开始计数.
             ids[i] = counter_id + start_id
             seq_states[i] = 0
             try:
@@ -429,17 +429,21 @@ def get_rl_batch(ids, seq_states, stop_states, counter_id, start_id, FLAGS, toke
 def get_reward(isStop, ss, pys, ids, seq_ids):
     global reward_counter
     reward = torch.zeros([len(isStop)], dtype=torch.float32)
+    Q_Val = torch.zeros([len(isStop)], dtype= torch.float32)
     for i in range(len(isStop)):
         if isStop[i] == 1:
             if pys[ids[i]][seq_ids[i]-1].argmax() == np.argmax(data_y[ids[i]]):
+                # 在这个位置停止之后，如果使用这个位置的输出来判定，确实是与标签一致，那么就奖励
                 reward_counter += 1 # more number of correct prediction, more rewards
                 r = 1 + FLAGS.reward_rate * math.log(reward_counter)
                 reward[i] = r   
             else:
                 reward[i] = -100
+            Q_Val[i] = reward[i]
         else:
-            reward[i] = -0.01 + 0.99 * max(ss[i])
-    return reward
+            reward[i] = -0.01 
+            Q_Val[i] = reward[i] + 0.99 * max(ss[i])
+    return reward, Q_Val
 
 
 def padding_sequence(sequences):
@@ -475,59 +479,61 @@ def get_RL_Train_batch(D, FLAGS, cuda=False):
     else:
         return s_state, s_x, s_isStop, s_rw
 
+def rdm_data2bert_tensors(data_X, cuda):
+    def padding_sent_list(sent_list):
+        sent_len = [len(sent) for sent in sent_list]
+        max_sent_len = max(sent_len)
+        sent_padding = torch.zeros([len(sent_list), max_sent_len], dtype=torch.int64)
+        attn_mask = torch.ones_like(sent_padding)
+        for i, sent in enumerate(sent_list):
+            sent_padding[i][:len(sent)] = torch.tensor(sent, dtype=torch.int32)
+            attn_mask[i][len(sent):].fill_(0)
+        return sent_padding, attn_mask
+    sent_list = []
+    [sent_list.extend(seq) for seq in data_X]
+    seq_len = [len(seq) for seq in data_X]
+    sent_tensors, attn_mask = padding_sent_list(sent_list)
+    if cuda:
+        sent_tensors = sent_tensors.cuda()
+        attn_mask = attn_mask.cuda()
+    return sent_tensors, attn_mask, seq_len
 
-def get_new_len(sentence2vec, rdm_model, cm_model, FLAGS, cuda):
-    # 因为计算句子向量的方式不一致，所以这个函数在生成句子向量的时候，应当要抽离出来,生成句子向量的部分在各个模型中自己定义
-    ids = list(range(500))
-    id_len = [0]*500
-    stoped = [0]*500
-    new_id = 501
-    new_x_len = np.zeros([len(data_ID)], dtype=np.int32)
-    zero_tensor = torch.zeros([1, 1, 768]) if not cuda else torch.zeros([1, 1, 768]).cuda()
-    with torch.no_grad():
-        while sum(stoped) != 500:
-            init_state = torch.zeros([1, 500, FLAGS.hidden_dim], dtype=torch.float32) if not cuda else torch.zeros([1, 500, FLAGS.hidden_dim], dtype=torch.float32).cuda()
-            try:
-                sentences = [data[data_ID[idx]]['text'][idx_len] if stoped[t] == 0 else [] for (t, (idx, idx_len)) in enumerate(list(zip(ids, id_len)))]
-            except:
-                print(t, idx, idx_len)
-                raise
-            try:
-                sentence_emb = torch.cat([sentence2vec(sent) if stoped[t]==0 else zero_tensor for (t,sent) in enumerate(sentences)], axis=0)
-            except:
-                print("sent:", sent)
-                raise
-            stopScore, isStop, rl_new_state = cm_model(rdm_model, sentence_emb, init_state)
-            init_state = rl_new_state
-            for k in range(len(isStop)):
-                if stoped[k] == 1:
-                    continue
-                if isStop[k] == 1: # 如果在这个位置停止了，就要重新调入一个序列
-                    new_x_len[ids[k]] = id_len[k]+1
-                    if new_id < len(data_ID):
-                        ids[k] = new_id
-                        id_len[k] = 0
-                        init_state[0][k].fill_(0.0)
-                        new_id += 1
-                    else:
-                        stoped[k] = 1
-                else:
-                    id_len[k] += 1
-                    if id_len[k] == data_len[ids[k]]:
-                        new_x_len[ids[k]] = id_len[k]
-                        if new_id < len(data_ID):
-                            ids[k] = new_id
-                            id_len[k] = 0
-                            init_state[0][k].fill_(0.0)
-                            new_id += 1
-                        else:
-                            stoped[k] = 1
-                        
-    for i in range(len(data_len)):    
-        if new_x_len[i] == 0 or new_x_len[i] > data_len[i]:
-            print("Error:")
-            new_x_len[i] = data_len[i]
-    return new_x_len
+
+def get_new_len(tokenizer, bert, rdm_model, cm_model, FLAGS, cuda):
+    batch_size = 20
+    new_len = []
+    if len(data_ID) % batch_size == 0: # the total number of events
+        flags = int(len(data_ID) / FLAGS.batch_size)
+    else:
+        flags = int(len(data_ID) / FLAGS.batch_size) + 1
+    for i in range(flags):
+        with torch.no_grad():
+            x, x_len, y = get_df_batch(i, batch_size, tokenizer=tokenizer)
+            sent_tensors, attn_mask, seq_len = rdm_data2bert_tensors(x, cuda)
+            bert_outs = bert(sent_tensors, attention_mask=attn_mask)
+            pooled_sents = [bert_outs[1][sum(seq_len[:idx]):sum(seq_len[:idx])+seq_len[idx]] for idx, s_len in enumerate(seq_len)]
+            x_emb = rnn_utils.pad_sequence(pooled_sents, batch_first=True).unsqueeze(-2)
+            batchsize, max_seq_len, max_sent_len, emb_dim = x_emb.shape
+            rdm_hiddens = rdm_model(x_emb)
+            batchsize, _, _ = rdm_hiddens.shape
+            rdm_outs = torch.cat(
+                [ rdm_hiddens[i][x_len[i]-1] for i in range(batchsize)] 
+                # a list of tensor, where the ndim of tensor is 1 and the shape of tensor is [hidden_size]
+            ).reshape(
+                [-1, rdm_model.hidden_dim]
+            )
+            stopScores = cm_model.Classifier(
+                    nn.functional.relu(
+                        cm_model.DenseLayer(
+                            rdm_hiddens.reshape([-1, rdm_model.hidden_dim])
+                    )
+                )
+            ).reshape(
+                [batchsize, -1, 2]
+            )
+            isStop = stopScores.argmax(axis=-1).cpu().numpy()
+            new_len.extend([iS.argmax() if iS.argmax() <= x_len[i] and iS.max() ==1 else x_len[i] for i, iS in enumerate(isStop)])
+    return new_len
 #　先计算一个批次，这个批次会改变，直到不能再变
 # 有两种情况需要改变:
 #   第一，某个序列经过ｃｍ模型判定，他可以停止了
@@ -538,3 +544,6 @@ def get_new_len(sentence2vec, rdm_model, cm_model, FLAGS, cuda):
 #   第二个是存储的len要变, 
 #   第三个是要重置init_state
 # 不能再变时，要把这个位置设置为停止
+
+
+# 这个函数太慢了，而且像是一个死循环
