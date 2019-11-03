@@ -532,7 +532,9 @@ def get_new_len(tokenizer, bert, rdm_model, cm_model, FLAGS, cuda):
                 [batchsize, -1, 2]
             )
             isStop = stopScores.argmax(axis=-1).cpu().numpy()
-            new_len.extend([iS.argmax() if iS.argmax() <= x_len[i] and iS.max() ==1 else x_len[i] for i, iS in enumerate(isStop)])
+            new_len.extend([iS.argmax()+1 if iS.argmax() <= x_len[i] and iS.max() ==1 else x_len[i] for i, iS in enumerate(isStop)])
+    print("max_new_len:", max(new_len))
+    print("mean_new_len:", sum(new_len)*1.0/len(new_len))
     return new_len
 #　先计算一个批次，这个批次会改变，直到不能再变
 # 有两种情况需要改变:
