@@ -134,22 +134,6 @@ class CM_Model(nn.Module):
 
 # #### 工具函数
 
-# In[23]:
-
-
-def Sent2Vec_Generater(tokenizer, bert, cuda):
-    def fn(sentence):
-        input_ids = tokenizer.encode(
-                            sentence,
-                            add_special_tokens=True
-                        )
-        input_ids = torch.tensor([input_ids]).cuda() if cuda else torch.tensor([input_ids])
-        outs = bert(input_ids)
-        sentence_emb = outs[1].reshape([1, 1,-1])
-        return sentence_emb
-    return fn
-
-
 
 def Count_Accs(ylabel, preds):
     correct_preds = np.array(
@@ -224,7 +208,7 @@ def sent_list2bert_tensors(sent_list, cuda):
 def TrainRDMModel(rdm_model, bert, rdm_classifier, 
                     tokenizer, t_steps, stage=0, new_data_len=[], logger=None, 
                         log_dir="RDMBertTrain", cuda=True):
-    batch_size = 20 
+    batch_size = 20
     max_gpu_batch = 5 #cannot load a larger batch into the limited memory, but we could  accumulates grads
     splits = int(batch_size/max_gpu_batch)
     assert(batch_size%max_gpu_batch == 0)
@@ -321,7 +305,6 @@ def TrainRDMModel(rdm_model, bert, rdm_classifier,
                         },
                         rdm_save_as
                     )
-#                 rdm_model, bert, sentiModel, rdm_classifier
             sum_acc = 0.0
             sum_loss = 0.0
     print(get_curtime() + " Train df Model End.")
@@ -362,37 +345,27 @@ def TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, stage, t_
     else:
         flags = int(len(data_ID) / FLAGS.batch_size) + 1
 
-    if os.path.exists("./%s/cached_ssq.pkl"%log_dir):
-    #load the cached ssq
-        with open("./%s/cached_ssq.pkl"%log_dir, 'rb') as handle:
-            ssq = pickle.load(handle)    
-    else:
-        for i in range(flags):
-            with torch.no_grad():
-                x, x_len, y = get_df_batch(i, batch_size, tokenizer=tokenizer)
-                sent_tensors, attn_mask, seq_len = rdm_data2bert_tensors(x, cuda)
-                bert_outs = bert(sent_tensors, attention_mask=attn_mask)
-                pooled_sents = [bert_outs[1][sum(seq_len[:idx]):sum(seq_len[:idx])+seq_len[idx]] for idx, s_len in enumerate(seq_len)]
-                x_emb = rnn_utils.pad_sequence(pooled_sents, batch_first=True).unsqueeze(-2)
-                batchsize, max_seq_len, max_sent_len, emb_dim = x_emb.shape
-                rdm_hiddens = rdm_model(x_emb)
-                batchsize, _, _ = rdm_hiddens.shape
-                rdm_outs = torch.cat(
-                    [ rdm_hiddens[i][x_len[i]-1] for i in range(batchsize)] 
-                    # a list of tensor, where the ndim of tensor is 1 and the shape of tensor is [hidden_size]
-                ).reshape(
-                    [-1, rdm_model.hidden_dim]
-                )
-                print("batch %d"%i)
-                if len(ssq) > 0:
-                    ssq.extend([rdm_classifier(h) for h in rdm_hiddens])
-                else:
-                    ssq = [rdm_classifier(h) for h in rdm_hiddens]
-        # cache ssq for development
-        with open('./%s/cached_ssq.pkl'%log_dir, 'wb') as handle:
-            pickle.dump(ssq, handle, protocol=pickle.HIGHEST_PROTOCOL)
-
-
+    for i in range(flags):
+        with torch.no_grad():
+            x, x_len, y = get_df_batch(i, batch_size, tokenizer=tokenizer)
+            sent_tensors, attn_mask, seq_len = rdm_data2bert_tensors(x, cuda)
+            bert_outs = bert(sent_tensors, attention_mask=attn_mask)
+            pooled_sents = [bert_outs[1][sum(seq_len[:idx]):sum(seq_len[:idx])+seq_len[idx]] for idx, s_len in enumerate(seq_len)]
+            x_emb = rnn_utils.pad_sequence(pooled_sents, batch_first=True).unsqueeze(-2)
+            batchsize, max_seq_len, max_sent_len, emb_dim = x_emb.shape
+            rdm_hiddens = rdm_model(x_emb)
+            batchsize, _, _ = rdm_hiddens.shape
+            rdm_outs = torch.cat(
+                [ rdm_hiddens[i][x_len[i]-1] for i in range(batchsize)] 
+                # a list of tensor, where the ndim of tensor is 1 and the shape of tensor is [hidden_size]
+            ).reshape(
+                [-1, rdm_model.hidden_dim]
+            )
+            print("batch %d"%i)
+            if len(ssq) > 0:
+                ssq.extend([rdm_classifier(h) for h in rdm_hiddens])
+            else:
+                ssq = [rdm_classifier(h) for h in rdm_hiddens]
     print(get_curtime() + " Now Start RL training ...")
 
     counter = 0
@@ -401,33 +374,32 @@ def TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, stage, t_
 
     while True:
         if counter > FLAGS.OBSERVE:
+        # if counter > 20:
             sum_rw += rw.mean()
             if counter % 200 == 0:
                 sum_rw = float(sum_rw) / 200
                 print( get_curtime() + " Step: " + str(counter) 
                        + " REWARD IS " + str(sum_rw) 
                      )
-                if sum_rw > t_rw:
-                    print("Retch The Target Reward")
-                    break
+                # if sum_rw > t_rw:
+                #     print("Retch The Target Reward")
+                #     break
                 if counter > t_steps:
                     print("Retch The Target Steps")
                     break
                 sum_rw = 0.0
-            s_state, s_x, s_isStop, s_rw = get_RL_Train_batch(D, FLAGS, cuda)
+            s_state, s_x, s_isStop, q_val = get_RL_Train_batch(D, FLAGS, cuda)
             sent_tensors, attn_mask = sent_list2bert_tensors(input_x, cuda)
             _, x_emb = bert(sent_tensors, attention_mask=attn_mask)
             x_emb = x_emb.unsqueeze(-2)
             stopScore, isStop, rl_new_state = cm_model(rdm_model, x_emb, s_state)
             out_action = (stopScore*s_isStop).sum(axis=1)
-            rl_cost = torch.mean((s_rw - out_action)*(s_rw - out_action))
+            rl_cost = torch.mean((q_val - out_action)*(q_val - out_action))
             rl_cost.backward()
             torch.cuda.empty_cache()
-
             rl_optim.step()
-    #             rdm_optim.step() #后期要尝试一下，是否要同时训练整个模型
+            print("RL Cost:", rl_cost)
             writer.add_scalar('RL Cost', rl_cost, counter - FLAGS.OBSERVE)
-            writer.add_scalar('RL Reward', rw.mean(), counter - FLAGS.OBSERVE)
 
         input_x, input_y, ids, seq_states, max_id = get_rl_batch(ids, seq_states, isStop, max_id, 0, FLAGS, tokenizer=tokenizer)
 
@@ -440,14 +412,16 @@ def TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, stage, t_
 
         for j in range(FLAGS.batch_size):
             if random.random() < FLAGS.random_rate:
-                isStop[j] = int(torch.rand(2).argmax())
+                isStop[j] = int(torch.rand(2).argmax()) # 设置了一个随机的干扰。
             if seq_states[j] == data_len[ids[j]]:
                 isStop[j] = 1
 
-        # eval
-        rw = get_reward(isStop, mss, ssq, ids, seq_states)
+        rw, QVal = get_reward(isStop, mss, ssq, ids, seq_states)
+        if counter > FLAGS.OBSERVE:
+            print("step:", counter - FLAGS.OBSERVE, ", reward:", rw.mean())
+            writer.add_scalar('reward', rw.mean(), counter - FLAGS.OBSERVE)
         for j in range(FLAGS.batch_size):
-            D.append((state[0][j], input_x[j], isStop[j], rw[j]))
+            D.append((state[0][j], input_x[j], isStop[j], QVal[j]))
             if len(D) > FLAGS.max_memory:
                 D.popleft()
 
@@ -507,30 +481,30 @@ else:
                         log_dir=log_dir, cuda=True)
 
 
-# #### 标准ERD模型
-# for i in range(20):
-#     if i==0:
-#         TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, i, 0.5, 50000, "BertERD/", None, FLAGS, cuda=True)
-#     else:
-#         TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, i, 0.5, 5000, "BertERD/", None, FLAGS, cuda=True)
-#     erd_save_as = './BertERD/erdModel_epoch%03d.pkl'% (i)
-#     torch.save(
-#         {
-#             "bert":bert.state_dict(),
-#             "rmdModel":rdm_model.state_dict(),
-#             "rdm_classifier": rdm_classifier.state_dict(),
-#             "cm_model":cm_model.state_dict()
-#         },
-#         erd_save_as
-#     )
-#     s2vec = Sent2Vec_Generater(tokenizer, bert, cuda=True)
-#     new_len = get_new_len(s2vec, rdm_model, cm_model, FLAGS, cuda=True)
-#     print("after new len:")
-#     TrainRDMModel(rdm_model, bert, rdm_classifier, 
-#                     tokenizer, i, 1000, new_data_len=new_len, logger=None, 
-#                         log_dir="BertERD_%d"%i)
+#### 标准ERD模型
+for i in range(20):
+    if i==0:
+        TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, i, 0.5, 20000, "BertERD/", None, FLAGS, cuda=True)
+    else:
+        TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, i, 0.5, 1000, "BertERD/", None, FLAGS, cuda=True)
+    
+    erd_save_as = '%s/erdModel_epoch%03d.pkl'% (log_dir , i)
+    torch.save(
+        {
+            "bert":bert.state_dict(),
+            "rmdModel":rdm_model.state_dict(),
+            "rdm_classifier": rdm_classifier.state_dict(),
+            "cm_model":cm_model.state_dict()
+        },
+        erd_save_as
+    )
+    print("iter:", i, ", train cm model completed!")
+    new_len = get_new_len(tokenizer, bert, rdm_model, cm_model, FLAGS, cuda=True)
+    print("after new len:")
+    TrainRDMModel(rdm_model, bert, rdm_classifier, 
+                    tokenizer, 500, i, new_data_len=new_len, logger=None, 
+                        log_dir=log_dir)
 
-# In[ ]:
 
 
 
