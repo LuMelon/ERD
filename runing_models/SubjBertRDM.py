@@ -11,7 +11,6 @@ import SubjObjLoader
 import json
 from torch import nn
 import torch
-from pytorch_transformers import *
 import importlib
 from collections import deque
 # import dataloader
@@ -21,11 +20,11 @@ import json
 import sys
 from torch import nn
 import torch
-from pytorch_transformers import *
 import importlib
 from tensorboardX import SummaryWriter
 import torch.nn.utils.rnn as rnn_utils
 import tsentiLoader
+from transformers import BertModel, BertConfig, BertTokenizer
 from emotionLoader import *
 from SubjObjLoader import *
 import numpy as np
@@ -222,7 +221,7 @@ def senti_data2bert_tensors(sent_list, cuda):
     return sent_padding, attn_mask
 
 def subj_cls_train(subj_reader, valid_reader, 
-                   bert, transformer, task_embedding, subj_classifier, 
+                   bert, task_embedding, subj_pooler, subj_classifier, 
                    train_epochs, cuda=False, log_dir="SubjRDM"
                   ):
     subj_weights = torch.tensor(
@@ -235,9 +234,9 @@ def subj_cls_train(subj_reader, valid_reader,
 
     optim = torch.optim.Adagrad([
                                 {'params': bert.parameters(), 'lr':5e-5},
-                                {'params': task_embedding.parameters(), 'lr':5e-5},
-                                {'params': transformer.parameters(), 'lr': 5e-5},
-                                {'params': subj_classifier.parameters(), 'lr': 5e-5}
+                                {'params': subj_pooler.parameters(), 'lr': 5e-3},
+                                {'params': task_embedding.parameters(), 'lr':5e-3},
+                                {'params': subj_classifier.parameters(), 'lr': 5e-3}
                              ]
     )
     losses = np.zeros([10]) 
@@ -253,10 +252,8 @@ def subj_cls_train(subj_reader, valid_reader,
         step = 0
         for xsj, ysj, lsj in subj_reader.iter():
             sent_tensors, sent_mask = senti_data2bert_tensors(xsj, cuda)
-            xsj_embs, _ = bert(sent_tensors, attention_mask = sent_mask)
-            tensors = xsj_embs + task_embedding(subj_task_id)
-            subj_feature = transformer(tensors, attention_mask = sent_mask)
-            cls_feature = subj_feature[0][:, 0]
+            xsj_embs, _ = bert(sent_tensors, attention_mask = sent_mask, task_emb=task_embedding(subj_task_id))
+            cls_feature = subj_pooler(xsj_embs[:, 0])
             subj_scores = subj_cls(cls_feature)
             y_label = torch.tensor(ysj.argmax(axis=1)).cuda() if cuda else torch.tensor(ysj.argmax(axis=1))
             sj_loss = subj_loss_fn(subj_scores, y_label)
@@ -287,10 +284,8 @@ def subj_cls_train(subj_reader, valid_reader,
             it = 0
             for xsj, ysj, lsj in valid_reader.iter():
                 sent_tensors, sent_mask = senti_data2bert_tensors(xsj, cuda)
-                xsj_embs, _ = bert(sent_tensors, attention_mask = sent_mask)
-                tensors = xsj_embs + task_embedding(subj_task_id)
-                subj_feature = transformer(tensors, attention_mask = sent_mask)
-                cls_feature = subj_feature[0][:, 0]
+                xsj_embs, _ = bert(sent_tensors, attention_mask = sent_mask, task_emb=task_embedding(subj_task_id))
+                cls_feature = subj_pooler(xsj_embs[:, 0])
                 subj_scores = subj_cls(cls_feature)
                 y_label = torch.tensor(ysj.argmax(axis=1)).cuda() if cuda else torch.tensor(ysj.argmax(axis=1))
                 sj_loss = subj_loss_fn(subj_scores, y_label)
@@ -313,13 +308,12 @@ def subj_cls_train(subj_reader, valid_reader,
             torch.save(
                 {
                     "bert":bert.state_dict(),
-                    "transformer":transformer.state_dict(),
                     "task_embedding":task_embedding.state_dict(),
+                    "subj_pooler":subj_pooler.state_dict(),
                     "subj_classifier": subj_classifier.state_dict(),
                 },
                 subj_save_as
             )
-
 
 def TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, stage, t_rw, t_steps, log_dir, logger, FLAGS, cuda=False):
     batch_size = 20
@@ -377,7 +371,7 @@ def TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, stage, t_
                 else:
                     ssq = [rdm_classifier(h) for h in rdm_hiddens]
         # cache ssq for development
-        with open('./%s/cached_ssq.pkl'%log_dir, 'wb') as handle:
+        with open('%s/cached_ssq.pkl'%log_dir, 'wb') as handle:
             pickle.dump(ssq, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
 
@@ -447,7 +441,7 @@ def TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, stage, t_
 
 
 def TrainRDMWithSubj(rdm_model, bert, rdm_classifier,
-                     transformer, task_embedding, subj_classifier, 
+                     subj_pooler, task_embedding, subj_classifier, 
                      subjReader, 
                     tokenizer, t_steps, new_data_len=[], logger=None, cuda=False, 
                         log_dir="SubjRDM"):
@@ -487,7 +481,7 @@ def TrainRDMWithSubj(rdm_model, bert, rdm_classifier,
                                 {'params': rdm_classifier.parameters(), 'lr': 1e-3},
                                 {'params': rdm_model.parameters(), 'lr': 1e-3},
                                 {'params': task_embedding.parameters(), 'lr':1e-3},
-                                {'params': transformer.parameters(), 'lr': 1e-3},
+                                {'params': subj_pooler.parameters(), 'lr': 1e-3},
                                 {'params': subj_classifier.parameters(), 'lr': 1e-3}
                              ]
     )
@@ -508,10 +502,8 @@ def TrainRDMWithSubj(rdm_model, bert, rdm_classifier,
             else:
                 x, x_len, y = get_df_batch(step*batch_size+j*max_gpu_batch, max_gpu_batch, tokenizer=tokenizer) 
             sent_tensors, attn_mask, seq_len = rdm_data2bert_tensors(x, cuda)
-            sent_outs, _ = bert(sent_tensors, attention_mask=attn_mask)
-            trans_outs = transformer(sent_outs, attention_mask=attn_mask)[0][:, 0, :]
-            pooled_sents = [trans_outs[sum(seq_len[:idx]):sum(seq_len[:idx])+seq_len[idx]] for idx, s_len in enumerate(seq_len)]
-
+            bert_outs = bert(sent_tensors, attention_mask=attn_mask)
+            pooled_sents = [bert_outs[1][sum(seq_len[:idx]):sum(seq_len[:idx])+seq_len[idx]] for idx, s_len in enumerate(seq_len)]
             data_tensors = rnn_utils.pad_sequence(pooled_sents, batch_first=True).unsqueeze(-2)
             rdm_hiddens = rdm_model(data_tensors)
             batchsize, _, _ = rdm_hiddens.shape
@@ -537,10 +529,8 @@ def TrainRDMWithSubj(rdm_model, bert, rdm_classifier,
             # ----------------subjective analysis------------------------
             xsj, ysj, lsj = subjReader.sample()
             sent_tensors, sent_mask = senti_data2bert_tensors(xsj, cuda)
-            xsj_embs, _ = bert(sent_tensors, attention_mask = sent_mask)
-            tensors = xsj_embs + task_embedding(subj_task_id)
-            subj_feature = transformer(tensors, attention_mask = sent_mask)
-            cls_feature = subj_feature[0][:, 0]
+            xsj_embs, _ = bert(sent_tensors, attention_mask = sent_mask, task_emb=task_embedding(subj_task_id))
+            cls_feature = subj_pooler(xsj_embs[:, 0])
             subj_scores = subj_cls(cls_feature)
             y_label = torch.tensor(ysj.argmax(axis=1)).cuda() if cuda else torch.tensor(ysj.argmax(axis=1))
             sj_loss = subj_loss_fn(subj_scores, y_label)
@@ -590,8 +580,8 @@ def TrainRDMWithSubj(rdm_model, bert, rdm_classifier,
                     torch.save(
                         {
                             "bert":bert.state_dict(),
-                            "transformer":transformer.state_dict(),
                             "task_embedding":task_embedding.state_dict(),
+                            "subj_pooler":subj_pooler.state_dict(),
                             "subj_classifier": subj_classifier.state_dict(),
                             "rmdModel":rdm_model.state_dict(),
                             "rdm_classifier": rdm_classifier.state_dict()
@@ -623,33 +613,11 @@ FLAGS = adict(dic)
 
 
 tt = BertTokenizer.from_pretrained("./bertModel/")
-bb = BertModel.from_pretrained("./bertModel/")
-task_embedding = nn.Embedding(3, 768)
+bert = BertModel.from_pretrained("./bertModel/").cuda()
+task_embedding = nn.Embedding(3, 768).cuda()
+subj_pooler = nn.Sequential(nn.Linear(bert.config.hidden_size, bert.config.hidden_size), nn.Tanh()).cuda()
+subj_cls = nn.Linear(768, 2).cuda()
 
-trans_conf = adict({
-  "attention_probs_dropout_prob": 0.2,
-  "hidden_act": "gelu",
-  "hidden_dropout_prob": 0.2,
-  "hidden_size": 768,
-  "initializer_range": 0.02,
-  "intermediate_size": 3072,
-  "layer_norm_eps": 1e-12,
-  "max_position_embeddings": 512,
-  "num_attention_heads": 12,
-  "num_hidden_layers": 1,
-  "num_labels": 2,
-  "output_attentions": False,
-  "output_hidden_states": False,
-  "torchscript": False
-})
-BertEncoder = transformer_utils.BertEncoder
-transformer = BertEncoder(trans_conf)
-
-subj_cls = nn.Linear(768, 2)
-bert = bb.cuda()
-transformer = transformer.cuda()
-task_embedding = task_embedding.cuda()
-subj_cls = subj_cls.cuda()
 rdm_model = RDM_Model(768, 300, 256, 0.2).cuda()
 rdm_classifier = nn.Linear(256, 2).cuda()
 cm_model = CM_Model(300, 256, 2).cuda()
@@ -673,18 +641,15 @@ load_data_fast()
     # device_ids = [int(device_id) for device_id in sys.argv[1].split(",")]
 device_ids = list( range( len( sys.argv[1].split(",") ) ) )
 bert = nn.DataParallel(bert, device_ids=device_ids)
-transformer = nn.DataParallel(transformer, device_ids=device_ids)
 
 device_name = "cuda:0"
 device = torch.device(device_name)
 bert.to(device)
-transformer.to(device)
-
 # In[8]:
 
-log_dir = os.path.join(sys.path[0], "TransRDM/")
+log_dir = os.path.join(sys.path[0], "SubjRDM/")
 
-joint_save_as = '%s/SubjRDM/subj_best_Model.pkl'%log_dir
+joint_save_as = '%s/subj_best_Model.pkl'%log_dir
 if os.path.exists(joint_save_as):
     checkpoint = torch.load(joint_save_as)
     bert.module.load_state_dict(checkpoint['bert'])
@@ -693,11 +658,11 @@ if os.path.exists(joint_save_as):
     subj_cls.load_state_dict(checkpoint['subj_classifier'])
 else:
     subj_cls_train(subj_train_reader, subj_valid_reader, 
-               bert, transformer, task_embedding, subj_cls, 
+               bert, task_embedding, subj_pooler, subj_cls, 
                2, cuda=True, log_dir=log_dir
               )
 
-rdm_save_as = '%s/TransOutSubjRDM_best.pkl'%log_dir
+rdm_save_as = '%s/SubjBertRDM_best.pkl'%log_dir
 if os.path.exists(rdm_save_as):
     checkpoint = torch.load(rdm_save_as)
     bert.load_state_dict(checkpoint['bert'])
@@ -708,7 +673,7 @@ if os.path.exists(rdm_save_as):
     rdm_classifier.load_state_dict(checkpoint["rdm_classifier"])
 else:
     TrainRDMWithSubj(rdm_model, bert, rdm_classifier,
-                         transformer, task_embedding, subj_cls, 
+                         subj_pooler, task_embedding, subj_cls, 
                          subj_train_reader, 
                         tt, 4000, new_data_len=[], logger=None, cuda=True, 
                             log_dir= log_dir)

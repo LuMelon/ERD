@@ -345,6 +345,7 @@ def TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, stage, t_
     else:
         flags = int(len(data_ID) / FLAGS.batch_size) + 1
 
+    rdm_hiddens_seq = []
     for i in range(flags):
         with torch.no_grad():
             x, x_len, y = get_df_batch(i, batch_size, tokenizer=tokenizer)
@@ -355,8 +356,11 @@ def TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, stage, t_
             batchsize, max_seq_len, max_sent_len, emb_dim = x_emb.shape
             rdm_hiddens = rdm_model(x_emb)
             batchsize, _, _ = rdm_hiddens.shape
+            tmp_hiddens = [ rdm_hiddens[i][x_len[i]-1] for i in range(batchsize)] 
+
+            rdm_hiddens_seq.extend(tmp_hiddens)
             rdm_outs = torch.cat(
-                [ rdm_hiddens[i][x_len[i]-1] for i in range(batchsize)] 
+                tmp_hiddens
                 # a list of tensor, where the ndim of tensor is 1 and the shape of tensor is [hidden_size]
             ).reshape(
                 [-1, rdm_model.hidden_dim]
@@ -366,6 +370,9 @@ def TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, stage, t_
                 ssq.extend([rdm_classifier(h) for h in rdm_hiddens])
             else:
                 ssq = [rdm_classifier(h) for h in rdm_hiddens]
+    del rdm_hiddens, tmp_hiddens, rdm_outs
+    torch.cuda.empty_cache()
+
     print(get_curtime() + " Now Start RL training ...")
 
     counter = 0
@@ -416,7 +423,7 @@ def TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, stage, t_
             if seq_states[j] == data_len[ids[j]]:
                 isStop[j] = 1
 
-        rw, QVal = get_reward(isStop, mss, ssq, ids, seq_states)
+        rw, QVal = get_reward_v1(isStop, mss, ssq, ids, seq_states, cm_model, rdm_hiddens_seq)
         if counter > FLAGS.OBSERVE:
             print("step:", counter - FLAGS.OBSERVE, ", reward:", rw.mean())
             print("step:", counter - FLAGS.OBSERVE, ", reward:", QVal.mean())

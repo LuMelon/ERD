@@ -661,7 +661,7 @@ bert.to(device)
 
 log_dir = os.path.join(sys.path[0], "SentiRDM/")
 
-joint_save_as = '%s/sentiRDM/senti_best_Model.pkl'%log_dir
+joint_save_as = '%s/senti_best_Model.pkl'%log_dir
 if os.path.exists(joint_save_as):
     checkpoint = torch.load(joint_save_as)
     bert.module.load_state_dict(checkpoint['bert'])

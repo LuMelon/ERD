@@ -22,7 +22,6 @@ import json
 import sys
 from torch import nn
 import torch
-from pytorch_transformers import *
 import importlib
 from tensorboardX import SummaryWriter
 import torch.nn.utils.rnn as rnn_utils

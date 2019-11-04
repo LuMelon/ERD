@@ -12,7 +12,6 @@ import SubjObjLoader
 import json
 from torch import nn
 import torch
-from pytorch_transformers import *
 import importlib
 from collections import deque
 # import dataloader
@@ -22,7 +21,7 @@ import json
 import sys
 from torch import nn
 import torch
-from pytorch_transformers import *
+from transformers import BertModel, BertConfig, BertTokenizer
 import importlib
 from tensorboardX import SummaryWriter
 import torch.nn.utils.rnn as rnn_utils
@@ -222,14 +221,112 @@ def senti_data2bert_tensors(sent_list, cuda):
         attn_mask = attn_mask.cuda()
     return sent_padding, attn_mask
 
+
+def subj_cls_train(subj_reader, valid_reader, 
+                   bert, task_embedding, subj_pooler, subj_classifier, 
+                   train_epochs, cuda=False, log_dir="SubjRDM"
+                  ):
+    subj_weights = torch.tensor(
+            WeightsForUmbalanced(
+                subj_reader.label
+            ),
+            dtype = torch.float32
+    )
+    subj_loss_fn = nn.CrossEntropyLoss(weight=subj_weights) if not cuda else nn.CrossEntropyLoss(weight=subj_weights.cuda())
+
+    optim = torch.optim.Adagrad([
+                                {'params': bert.parameters(), 'lr':5e-5},
+                                {'params': subj_pooler.parameters(), 'lr': 5e-3},
+                                {'params': task_embedding.parameters(), 'lr':5e-3},
+                                {'params': subj_classifier.parameters(), 'lr': 5e-3}
+                             ]
+    )
+    losses = np.zeros([10]) 
+    accs = np.zeros([10])
+    
+    writer = SummaryWriter(log_dir)
+    
+    subj_task_id = torch.tensor([1]).cuda() if cuda else torch.tensor([1])
+    best_valid_acc = 0.0
+    
+    optim.zero_grad()
+    for epoch in range(train_epochs):
+        step = 0
+        for xsj, ysj, lsj in subj_reader.iter():
+            sent_tensors, sent_mask = senti_data2bert_tensors(xsj, cuda)
+            xsj_embs, _ = bert(sent_tensors, attention_mask = sent_mask, task_emb=task_embedding(subj_task_id))
+            cls_feature = subj_pooler(xsj_embs[:, 0])
+            subj_scores = subj_cls(cls_feature)
+            y_label = torch.tensor(ysj.argmax(axis=1)).cuda() if cuda else torch.tensor(ysj.argmax(axis=1))
+            sj_loss = subj_loss_fn(subj_scores, y_label)
+            sj_acc = accuracy_score(ysj.argmax(axis=1), subj_scores.cpu().argmax(axis=1))
+            optim.zero_grad()
+            sj_loss.backward()
+            optim.step()
+            torch.cuda.empty_cache()
+            
+            losses[int(step%10)] = sj_loss.cpu()
+            accs[int(step%10)] = sj_acc
+            
+            print("step:%d | loss/acc = %.3f/%.3f"%(step, sj_loss, sj_acc))
+            writer.add_scalar('Train Loss', sj_loss.cpu(), step)
+            writer.add_scalar('Train Accuracy', sj_acc, step)
+            if step %10 == 9:
+                print('subjective task: %6d: [%5d/%5d], subj_loss/subj_acc = %6.8f/%6.7f ' % ( step,
+                                                                                epoch, train_epochs,
+                                                                                losses.mean(), accs.mean(),
+                                                                            )
+                         )
+            step += 1 
+        
+        with torch.no_grad():
+            bs_cnt, bs, l_cnt = valid_reader.label.shape
+            preds = []
+            losses = np.zeros(bs_cnt)
+            it = 0
+            for xsj, ysj, lsj in valid_reader.iter():
+                sent_tensors, sent_mask = senti_data2bert_tensors(xsj, cuda)
+                xsj_embs, _ = bert(sent_tensors, attention_mask = sent_mask, task_emb=task_embedding(subj_task_id))
+                cls_feature = subj_pooler(xsj_embs[:, 0])
+                subj_scores = subj_cls(cls_feature)
+                y_label = torch.tensor(ysj.argmax(axis=1)).cuda() if cuda else torch.tensor(ysj.argmax(axis=1))
+                sj_loss = subj_loss_fn(subj_scores, y_label)
+                sj_acc = accuracy_score(ysj.argmax(axis=1), subj_scores.cpu().argmax(axis=1))
+                losses[it] = sj_loss
+                preds.append(subj_scores)
+                torch.cuda.empty_cache()
+                it += 1
+            val_preds = torch.cat(preds).cpu()
+            val_acc = accuracy_score(valid_reader.label.reshape(bs_cnt*bs, l_cnt).argmax(axis=1), val_preds.argmax(axis=1))
+            val_loss = losses.mean()
+            writer.add_scalar('valid Loss', val_loss, epoch)
+            writer.add_scalar('valid Accuracy', val_acc, epoch)
+            print("valid loss/acc: %.6f/%.6f:"%(val_loss, val_acc))
+
+        if val_acc > best_valid_acc:
+            best_valid_acc = val_acc
+            print("best_valid_acc:", best_valid_acc)
+            subj_save_as = '%s/subj_best_Model.pkl'% (log_dir)
+            torch.save(
+                {
+                    "bert":bert.state_dict(),
+                    "task_embedding":task_embedding.state_dict(),
+                    "subj_pooler":subj_pooler.state_dict(),
+                    "subj_classifier": subj_classifier.state_dict(),
+                },
+                subj_save_as
+            )
+
+
+
 def senti_cls_train(senti_reader, valid_reader,
-                    bert, transformer, task_embedding, senti_classifier,
+                    bert, task_embedding, senti_pooler, senti_classifier,
                     train_epochs, cuda=False, log_dir="SentiRDM"
                    ):
     optim = torch.optim.Adam([
                                 {'params': bert.parameters(), 'lr':1e-5},
                                 {'params': task_embedding.parameters(), 'lr':1e-4},
-                                {'params': transformer.parameters(), 'lr': 1e-4},
+                                {'params': senti_pooler.parameters(), 'lr': 1e-4},
                                 {'params': senti_classifier.parameters(), 'lr': 1e-4}
                              ]
     )
@@ -243,26 +340,22 @@ def senti_cls_train(senti_reader, valid_reader,
             dtype=torch.float32
     )
     senti_loss_fn = nn.CrossEntropyLoss(weight=senti_weights.cuda()) if cuda else nn.CrossEntropyLoss(weight=senti_weights)
-    senti_task_id = torch.tensor([0]) if not cuda else torch.tensor([0]).cuda()
+    senti_task_id = torch.tensor([0], dtype=torch.int64) if not cuda else torch.tensor([0], dtype=torch.int64).cuda()
     #-------------------------------------------------------------    
     losses = np.zeros([10]) 
     accs = np.zeros([10])
     best_valid_acc = 0
     writer = SummaryWriter(log_dir)
-    
-    task_emb = task_embedding(torch.tensor([0]).cuda()) if cuda else task_embedding(torch.tensor([0]))
-    
+
     optim.zero_grad()
     
     step = 0
     for epoch in range(train_epochs):
         for xst, yst, lst in senti_reader.iter():
             sent_tensors, sent_mask = senti_data2bert_tensors(xst, cuda)
-            xst_embs, _ = bert(sent_tensors, attention_mask = sent_mask)
-            tensors = xst_embs + task_embedding(senti_task_id)
-            senti_feature = transformer(tensors, attention_mask = sent_mask)
-            cls_feature = senti_feature[0][:, 0]
-            senti_scores = senti_cls(cls_feature)
+            xst_embs, _ = bert(sent_tensors, attention_mask = sent_mask, task_emb=task_embedding(senti_task_id))
+            cls_feature = senti_pooler(xst_embs[:, 0])
+            senti_scores = senti_classifier(cls_feature)
             y_label = torch.tensor(yst.argmax(axis=1)).cuda() if cuda else torch.tensor(yst.argmax(axis=1))
             st_loss = senti_loss_fn(senti_scores, y_label)
             st_acc = accuracy_score(yst.argmax(axis=1), senti_scores.cpu().argmax(axis=1))
@@ -290,11 +383,9 @@ def senti_cls_train(senti_reader, valid_reader,
             it = 0
             for xst, yst, lst in valid_reader.iter():
                 sent_tensors, sent_mask = senti_data2bert_tensors(xst, cuda)
-                xst_embs, _ = bert(sent_tensors, attention_mask = sent_mask)
-                tensors = xst_embs + task_embedding(senti_task_id)
-                senti_feature = transformer(tensors, attention_mask = sent_mask)
-                cls_feature = senti_feature[0][:, 0]
-                senti_scores = senti_cls(cls_feature)
+                xst_embs, _ = bert(sent_tensors, attention_mask = sent_mask, task_emb=task_embedding(senti_task_id))
+                cls_feature = senti_pooler(xst_embs[:, 0])
+                senti_scores = senti_classifier(cls_feature)
                 y_label = torch.tensor(yst.argmax(axis=1)).cuda() if cuda else torch.tensor(yst.argmax(axis=1))
                 st_loss = senti_loss_fn(senti_scores, y_label)
                 st_acc = accuracy_score(yst.argmax(axis=1), senti_scores.cpu().argmax(axis=1))
@@ -315,8 +406,8 @@ def senti_cls_train(senti_reader, valid_reader,
             torch.save(
                 {
                     "bert":bert.state_dict(),
-                    "transformer":transformer.state_dict(),
                     "task_embedding":task_embedding.state_dict(),
+                    "senti_pooler":senti_pooler.state_dict(),
                     "senti_classifier": senti_classifier.state_dict()
                 },
                 senti_save_as
@@ -406,7 +497,7 @@ def TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, stage, t_
                     break
                 sum_rw = 0.0
             s_state, s_x, s_isStop, s_rw = get_RL_Train_batch(D, FLAGS, cuda)
-            sent_tensors, attn_mask = senti_data2bert_tensors(input_x, cuda)
+            sent_tensors, attn_mask = senti_data2bert_tensors(s_x, cuda)
             _, x_emb = bert(sent_tensors, attention_mask=attn_mask)
             x_emb = x_emb.unsqueeze(-2)
             stopScore, isStop, rl_new_state = cm_model(rdm_model, x_emb, s_state)
@@ -449,9 +540,10 @@ def TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, stage, t_
         counter += 1
 
 
-def TrainRDMWithSenti(rdm_model, bert, rdm_classifier,
-                     transformer, task_embedding, senti_classifier, 
-                     sentiReader, 
+def TrainRDMWithMTL(rdm_model, bert, rdm_classifier,
+                     senti_pooler, subj_pooler, task_embedding, 
+                     senti_classifier, subj_classifier, 
+                     sentiReader, subjReader,
                     tokenizer, t_steps, new_data_len=[], logger=None, cuda=False, 
                         log_dir="sentiRDM"):
     batch_size = 20
@@ -460,8 +552,8 @@ def TrainRDMWithSenti(rdm_model, bert, rdm_classifier,
 
     assert(batch_size%max_gpu_batch == 0)
 
-    sum_loss = np.zeros(3)
-    sum_acc = np.zeros(2)
+    sum_loss = np.zeros(4)
+    sum_acc = np.zeros(3)
 
     t_acc = 0.9
     ret_acc = 0.0
@@ -484,22 +576,36 @@ def TrainRDMWithSenti(rdm_model, bert, rdm_classifier,
     senti_task_id = torch.tensor([1]) if not cuda else torch.tensor([1]).cuda()
     #-------------------------------------------------------------    
 
-    loss_weight = torch.tensor([0.9, 0.1]) if not cuda else torch.tensor([0.9, 0.1]).cuda()   
+    #  subj loss graph
+    #-----------------------------------------------------------
+    subj_weights = torch.tensor(
+            WeightsForUmbalanced(
+                subjReader.label
+            ),
+            dtype = torch.float32
+    )
+    subj_loss_fn = nn.CrossEntropyLoss(weight=subj_weights) if not cuda else nn.CrossEntropyLoss(weight=subj_weights.cuda())
+    subj_task_id = torch.tensor([1]) if not cuda else torch.tensor([1]).cuda()
+    #-------------------------------------------------------------    
+
+    loss_weight = torch.tensor([0.8, 0.1, 0.1]) if not cuda else torch.tensor([0.8, 0.1, 0.1]).cuda()   
 
     lr_lambda = lambda epoch: 0.01 if epoch < 20 else 1 #warm up the learning rate 
     optim = torch.optim.Adam([
-                                {'params': bert.parameters(), 'lr':5e-5},
+                                {'params': bert.parameters(), 'lr':1e-5},
                                 {'params': rdm_classifier.parameters(), 'lr': 1e-3},
                                 {'params': rdm_model.parameters(), 'lr': 1e-3},
-                                {'params': task_embedding.parameters(), 'lr':1e-3},
-                                {'params': transformer.parameters(), 'lr': 1e-3},
-                                {'params': senti_classifier.parameters(), 'lr': 1e-3}
+                                {'params': task_embedding.parameters(), 'lr':5e-4},
+                                {'params': senti_pooler.parameters(), 'lr': 5e-4},
+                                {'params': subj_pooler.parameters(), 'lr': 5e-4},
+                                {'params': senti_classifier.parameters(), 'lr': 5e-4},
+                                {'params': subj_classifier.parameters(), 'lr': 5e-4}
                              ]
     )
 
     writer = SummaryWriter(log_dir)
-    acc_tmp = np.zeros([2, int(batch_size/max_gpu_batch)])
-    loss_tmp = np.zeros([3, int(batch_size/max_gpu_batch)])
+    acc_tmp = np.zeros([3, int(batch_size/max_gpu_batch)])
+    loss_tmp = np.zeros([4, int(batch_size/max_gpu_batch)])
 
     best_valid_acc = 0.0
     for step in range(t_steps):
@@ -513,10 +619,8 @@ def TrainRDMWithSenti(rdm_model, bert, rdm_classifier,
             else:
                 x, x_len, y = get_df_batch(step*batch_size+j*max_gpu_batch, max_gpu_batch, tokenizer=tokenizer) 
             sent_tensors, attn_mask, seq_len = rdm_data2bert_tensors(x, cuda)
-            sent_outs, _ = bert(sent_tensors, attention_mask=attn_mask)
-            trans_outs = transformer(sent_outs, attention_mask=attn_mask)[0][:, 0, :]
-            pooled_sents = [trans_outs[sum(seq_len[:idx]):sum(seq_len[:idx])+seq_len[idx]] for idx, s_len in enumerate(seq_len)]
-
+            bert_outs = bert(sent_tensors, attention_mask=attn_mask)
+            pooled_sents = [bert_outs[1][sum(seq_len[:idx]):sum(seq_len[:idx])+seq_len[idx]] for idx, s_len in enumerate(seq_len)]
             data_tensors = rnn_utils.pad_sequence(pooled_sents, batch_first=True).unsqueeze(-2)
             rdm_hiddens = rdm_model(data_tensors)
             batchsize, _, _ = rdm_hiddens.shape
@@ -540,49 +644,63 @@ def TrainRDMWithSenti(rdm_model, bert, rdm_classifier,
             #----------------------------------------------------------------------
 
             # ----------------sentiective analysis------------------------
-            xsj, ysj, lsj = sentiReader.sample()
-            sent_tensors, sent_mask = senti_data2bert_tensors(xsj, cuda)
-            xsj_embs, _ = bert(sent_tensors, attention_mask = sent_mask)
-            tensors = xsj_embs + task_embedding(senti_task_id)
-            senti_feature = transformer(tensors, attention_mask = sent_mask)
-            cls_feature = senti_feature[0][:, 0]
+            xst, yst, lst = sentiReader.sample()
+            sent_tensors, sent_mask = senti_data2bert_tensors(xst, cuda)
+            xst_embs, _ = bert(sent_tensors, attention_mask = sent_mask, task_emb=task_embedding(senti_task_id))
+            cls_feature = senti_pooler(xst_embs[:, 0])
             senti_scores = senti_classifier(cls_feature)
-            y_label = torch.tensor(ysj.argmax(axis=1)).cuda() if cuda else torch.tensor(ysj.argmax(axis=1))
-            sj_loss = senti_loss_fn(senti_scores, y_label)
-            sj_acc = accuracy_score(ysj.argmax(axis=1), senti_scores.cpu().argmax(axis=1))
-            sj_loss_back = sj_loss*loss_weight[1]
-            sj_loss_back.backward()
+            y_label = torch.tensor(yst.argmax(axis=1)).cuda() if cuda else torch.tensor(ysj.argmax(axis=1))
+            st_loss = senti_loss_fn(senti_scores, y_label)
+            st_acc = accuracy_score(yst.argmax(axis=1), senti_scores.cpu().argmax(axis=1))
+            st_loss_back = st_loss*loss_weight[1]
+            st_loss_back.backward()
             torch.cuda.empty_cache()
             #-----------------------------------------------------------
-            loss_tmp[:, j] = np.array([loss_back+sj_loss_back, loss.mean(), sj_loss.mean()])
-            acc_tmp[:, j] = np.array([acc.mean(), sj_acc.mean()])
+
+            # ----------------subjective analysis------------------------
+            xsj, ysj, lsj = subjReader.sample()
+            sent_tensors, sent_mask = senti_data2bert_tensors(xsj, cuda)
+            xsj_embs, _ = bert(sent_tensors, attention_mask = sent_mask, task_emb=task_embedding(subj_task_id))
+            cls_feature = subj_pooler(xsj_embs[:, 0])
+            subj_scores = subj_classifier(cls_feature)
+            y_label = torch.tensor(ysj.argmax(axis=1)).cuda() if cuda else torch.tensor(ysj.argmax(axis=1))
+            sj_loss = subj_loss_fn(subj_scores, y_label)
+            sj_acc = accuracy_score(ysj.argmax(axis=1), subj_scores.cpu().argmax(axis=1))
+            sj_loss_back = sj_loss*loss_weight[2]
+            sj_loss_back.backward()
             torch.cuda.empty_cache()
 
-        optim.step()
-        optim.zero_grad()
+
+            loss_tmp[:, j] = np.array([float(loss_back+st_loss_back+sj_loss_back), loss, st_loss, sj_loss])
+            acc_tmp[:, j] = np.array([acc, st_acc, sj_acc])
+            
+        optim.step()        
         writer.add_scalar('Train Loss', loss_tmp[0].mean(), step)
         writer.add_scalar('Train Accuracy', acc_tmp[0].mean(), step)
         writer.add_scalar('senti Loss', loss_tmp[1].mean(), step)
         writer.add_scalar('senti Accuracy', acc_tmp[1].mean(), step)
+        writer.add_scalar('subj Loss', loss_tmp[2].mean(), step)
+        writer.add_scalar('subj Accuracy', acc_tmp[2].mean(), step)
 
 
         sum_acc += acc_tmp.mean(axis=1)
         sum_loss += loss_tmp.mean(axis=1)
-
-        print("%6d %6d|MTL_Loss:%6.8f, rdm_loss/rdm_acc = %6.8f/%6.7f | senti_loss/senti_acc = %6.8f/%6.7f " % (
+        print("%6d %6d|MTL_Loss:%6.8f, rdm_loss/rdm_acc = %6.8f/%6.7f | senti_loss/senti_acc = %6.8f/%6.7f | subj_loss/subj_acc = %6.8f/%6.7f " % (
                                                                                                 step, t_steps, loss_tmp[0].mean(),        
                                                                                             loss_tmp[1].mean(), acc_tmp[0].mean(),
-                                                                                            loss_tmp[2].mean(), acc_tmp[1].mean()
+                                                                                            loss_tmp[2].mean(), acc_tmp[1].mean(),
+                                                                                            loss_tmp[3].mean(), acc_tmp[2].mean()
             )
             )
-
+        
         if step % 10 == 9:
             sum_loss = sum_loss / 10
             sum_acc = sum_acc / 10
-            print("MTL_Loss:%6.8f, rdm_loss/rdm_acc = %6.8f/%6.7f | senti_loss/senti_acc = %6.8f/%6.7f" % (
+            print("MTL_Loss:%6.8f, rdm_loss/rdm_acc = %6.8f/%6.7f | senti_loss/senti_acc = %6.8f/%6.7f | subj_loss/subj_acc = %6.8f/%6.7f " % (
                                                                                             sum_loss[0],        
                                                                                             sum_loss[1], sum_acc[0],
-                                                                                            sum_loss[2], sum_acc[1]
+                                                                                            sum_loss[2], sum_acc[1],
+                                                                                            sum_loss[3], sum_acc[2]
             )
             )
             if step%100 == 99:
@@ -591,12 +709,14 @@ def TrainRDMWithSenti(rdm_model, bert, rdm_classifier,
                 if valid_acc > best_valid_acc:
                     best_valid_acc = valid_acc
                     print("best valid_acc:", best_valid_acc)
-                    rdm_save_as = '%s/sentiRDM_best.pkl'% (log_dir)
+                    rdm_save_as = '%s/MTLBertRDM_best.pkl'% (log_dir)
                     torch.save(
                         {
                             "bert":bert.state_dict(),
-                            "transformer":transformer.state_dict(),
                             "task_embedding":task_embedding.state_dict(),
+                            "subj_pooler":subj_pooler.state_dict(),
+                            "subj_classifier": subj_classifier.state_dict(),
+                            "senti_pooler":senti_pooler.state_dict(),
                             "senti_classifier": senti_classifier.state_dict(),
                             "rmdModel":rdm_model.state_dict(),
                             "rdm_classifier": rdm_classifier.state_dict()
@@ -628,45 +748,27 @@ FLAGS = adict(dic)
 
 
 tt = BertTokenizer.from_pretrained("./bertModel/")
-bb = BertModel.from_pretrained("./bertModel/")
-task_embedding = nn.Embedding(3, 768)
+bert = BertModel.from_pretrained("./bertModel/").cuda()
+task_embedding = nn.Embedding(3, 768).cuda()
 
-trans_conf = adict({
-  "attention_probs_dropout_prob": 0.2,
-  "hidden_act": "gelu",
-  "hidden_dropout_prob": 0.2,
-  "hidden_size": 768,
-  "initializer_range": 0.02,
-  "intermediate_size": 3072,
-  "layer_norm_eps": 1e-12,
-  "max_position_embeddings": 512,
-  "num_attention_heads": 12,
-  "num_hidden_layers": 1,
-  "num_labels": 2,
-  "output_attentions": False,
-  "output_hidden_states": False,
-  "torchscript": False
-})
-BertEncoder = transformer_utils.BertEncoder
-transformer = BertEncoder(trans_conf)
+senti_pooler = nn.Sequential(nn.Linear(bert.config.hidden_size, bert.config.hidden_size), nn.Tanh()).cuda()
+senti_cls = nn.Linear(768, 2).cuda()
 
-senti_cls = nn.Linear(768, 2)
-bert = bb.cuda()
-transformer = transformer.cuda()
-task_embedding = task_embedding.cuda()
-senti_cls = senti_cls.cuda()
+subj_pooler = nn.Sequential(nn.Linear(bert.config.hidden_size, bert.config.hidden_size), nn.Tanh()).cuda()
+subj_cls = nn.Linear(768, 2).cuda()
+
 rdm_model = RDM_Model(768, 300, 256, 0.2).cuda()
 rdm_classifier = nn.Linear(256, 2).cuda()
 cm_model = CM_Model(300, 256, 2).cuda()
 
 # In[7]:
 
-# subj_file = "./rotten_imdb/subj.data"
-# obj_file = "./rotten_imdb/obj.data"
-# tr, dev, te = load_data(subj_file, obj_file)
+subj_file = "./rotten_imdb/subj.data"
+obj_file = "./rotten_imdb/obj.data"
+tr, dev, _ = load_data(subj_file, obj_file)
 
-# subj_train_reader = SubjObjReader(tr, 20, tt)
-# subj_valid_reader = SubjObjReader(dev, 20, tt)
+subj_train_reader = SubjObjReader(tr, 20, tt)
+subj_valid_reader = SubjObjReader(dev, 20, tt)
 # subj_test_reader =  SubjObjReader(te, 20, tt)
 
 train_file = "./trainingandtestdata/training.1600000.processed.noemoticon.csv"
@@ -686,45 +788,60 @@ load_data_fast()
     # device_ids = [int(device_id) for device_id in sys.argv[1].split(",")]
 device_ids = list( range( len( sys.argv[1].split(",") ) ) )
 bert = nn.DataParallel(bert, device_ids=device_ids)
-transformer = nn.DataParallel(transformer, device_ids=device_ids)
 
 device_name = "cuda:0"
 device = torch.device(device_name)
 bert.to(device)
-transformer.to(device)
 
 # In[8]:
 
-log_dir = os.path.join(sys.path[0], "TransRDM/")
+log_dir = os.path.join(sys.path[0], "MTLBertERD/")
 
-joint_save_as = './sentiRDM/senti_best_Model.pkl'
+joint_save_as = '%s/senti_best_Model.pkl'%log_dir
 if os.path.exists(joint_save_as):
     checkpoint = torch.load(joint_save_as)
     bert.module.load_state_dict(checkpoint['bert'])
-    transformer.module.load_state_dict(checkpoint['transformer'])
     task_embedding.load_state_dict(checkpoint['task_embedding'])
+    senti_pooler.load_state_dict(checkpoint['senti_pooler'])
     senti_cls.load_state_dict(checkpoint['senti_classifier'])
 else:
     senti_cls_train(senti_train_reader, senti_valid_reader, 
-               bert, transformer, task_embedding, senti_cls, 
+               bert, task_embedding, senti_pooler, senti_cls, 
                2, cuda=True, log_dir=log_dir
               )
 
-rdm_save_as = '%s/TransOutsentiRDM_best.pkl'%log_dir
+
+joint_save_as = '%s/subj_best_Model.pkl'%log_dir
+if os.path.exists(joint_save_as):
+    checkpoint = torch.load(joint_save_as)
+    bert.module.load_state_dict(checkpoint['bert'])
+    task_embedding.load_state_dict(checkpoint['task_embedding'])
+    subj_pooler.load_state_dict(checkpoint['subj_pooler'])
+    subj_cls.load_state_dict(checkpoint['subj_classifier'])
+else:
+    subj_cls_train(subj_train_reader, subj_valid_reader, 
+               bert, task_embedding, subj_pooler, subj_cls, 
+               1, cuda=True, log_dir=log_dir
+              )
+
+rdm_save_as = '%s/MTLBertRDM_best.pkl'%log_dir
 if os.path.exists(rdm_save_as):
     checkpoint = torch.load(rdm_save_as)
-    bert.load_state_dict(checkpoint['bert'])
-    transformer.load_state_dict(checkpoint['transformer'])
+    bert.module.load_state_dict(checkpoint['bert'])
     task_embedding.load_state_dict(checkpoint['task_embedding'])
+    senti_pooler.load_state_dict(checkpoint['senti_pooler'])
     senti_cls.load_state_dict(checkpoint['senti_classifier'])
+    subj_pooler.load_state_dict(checkpoint['subj_pooler'])
+    subj_cls.load_state_dict(checkpoint['subj_classifier'])
     rdm_model.load_state_dict(checkpoint['rmdModel'])
     rdm_classifier.load_state_dict(checkpoint["rdm_classifier"])
 else:
-    TrainRDMWithSenti(rdm_model, bert, rdm_classifier,
-                         transformer, task_embedding, senti_cls, 
-                         senti_train_reader, 
-                        tt, 4000, new_data_len=[], logger=None, cuda=True, 
-                            log_dir= log_dir)
+    TrainRDMWithMTL(rdm_model, bert, rdm_classifier,
+                     senti_pooler, subj_pooler, task_embedding, 
+                     senti_cls, subj_cls, 
+                     senti_train_reader, subj_train_reader,
+                    tt, 4000, new_data_len=[], logger=None, cuda=True, 
+                        log_dir=log_dir)
 
 print("train rdm model with senti task is completed!")
 

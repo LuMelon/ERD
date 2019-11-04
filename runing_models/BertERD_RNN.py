@@ -16,7 +16,7 @@ from pytorch_transformers import *
 import importlib
 from collections import deque
 # import dataloader
-from BertRDMLoader import *
+from RNNERDLoader import *
 import json
 from torch import nn
 import torch
@@ -381,9 +381,9 @@ def TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, stage, t_
                 print( get_curtime() + " Step: " + str(counter) 
                        + " REWARD IS " + str(sum_rw) 
                      )
-                # if sum_rw > t_rw:
-                #     print("Retch The Target Reward")
-                #     break
+                if sum_rw > t_rw:
+                    print("Retch The Target Reward")
+                    break
                 if counter > t_steps:
                     print("Retch The Target Steps")
                     break
@@ -419,7 +419,6 @@ def TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, stage, t_
         rw, QVal = get_reward(isStop, mss, ssq, ids, seq_states)
         if counter > FLAGS.OBSERVE:
             print("step:", counter - FLAGS.OBSERVE, ", reward:", rw.mean())
-            print("step:", counter - FLAGS.OBSERVE, ", reward:", QVal.mean())
             writer.add_scalar('reward', rw.mean(), counter - FLAGS.OBSERVE)
         for j in range(FLAGS.batch_size):
             D.append((state[0][j], input_x[j], isStop[j], QVal[j]))
@@ -484,18 +483,13 @@ else:
 
 #### 标准ERD模型
 for i in range(20):
-    erd_save_as = '%s/erdModel_epoch%03d.pkl'% (log_dir , i)
+    
     if i==0:
-        if os.path.exists(erd_save_as):
-            checkpoint = torch.load(erd_save_as)
-            bert.load_state_dict(checkpoint['bert'])
-            rdm_model.load_state_dict(checkpoint["rmdModel"])
-            rdm_classifier.load_state_dict(checkpoint["rdm_classifier"])
-            cm_model.load_state_dict(checkpoint['cm_model'])
-        else:
-            TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, i, 0.5, 20000, "BertERD/", None, FLAGS, cuda=True)
+        TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, i, 0.5, 20000, "BertERD/", None, FLAGS, cuda=True)
     else:
         TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, i, 0.5, 1000, "BertERD/", None, FLAGS, cuda=True)
+    
+    erd_save_as = '%s/erdModel_epoch%03d.pkl'% (log_dir , i)
     torch.save(
         {
             "bert":bert.state_dict(),
