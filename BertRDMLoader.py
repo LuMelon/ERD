@@ -445,6 +445,44 @@ def get_reward(isStop, ss, pys, ids, seq_ids):
     return reward, Q_Val
 
 
+# def get_reward_v1(isStop, ss, pys, ids, seq_ids, cm_model, rdm_outs):
+def get_reward_v1(isStop, mss, ssq, ids, seq_states, cm_model, rdm_hiddens_seq):
+    global reward_counter
+    reward = torch.zeros([len(isStop)], dtype=torch.float32)
+    Q_Val = torch.zeros([len(isStop)], dtype= torch.float32)
+    for i in range(len(isStop)):
+        if isStop[i] == 1:
+            if ssq[ids[i]][seq_states[i]-1].argmax() == np.argmax(data_y[ids[i]]):
+                reward_counter += 1 # more number of correct prediction, more rewards
+                r = 1 + min(FLAGS.reward_rate * math.log(reward_counter), 10)
+                reward[i] = r   
+                with torch.no_grad():
+                    subsequent_score = cm_model.Classifier(
+                        nn.functional.relu(
+                            cm_model.DenseLayer(
+                                rdm_hiddens_seq[ids[i]]
+                            )
+                        )
+                    )               
+                torch.cuda.empty_cache()
+                print("data_len:", data_len[ids[i]])
+                print("subsequent_score:", subsequent_score.shape)
+
+                for j in range(seq_states[i], data_len[ids[i]]):
+                    if subsequent_score[j][0] > subsequent_score[j][1]:
+                        reward[i] += -20
+                        break
+                    else:
+                        reward[i] +=  15.0/(data_len[i] - seq_states[i])
+            else:
+                reward[i] = -100
+            Q_Val[i] = reward[i]
+        else:
+            reward[i] = -0.01 
+            Q_Val[i] = reward[i] + 0.99 * max(mss[i])
+    return reward, Q_Val
+
+
 def padding_sequence(sequences):
     max_size = sequences[0].size()
     trailing_dims = max_size[2:]
@@ -501,6 +539,7 @@ def rdm_data2bert_tensors(data_X, cuda):
 def get_new_len(tokenizer, bert, rdm_model, cm_model, FLAGS, cuda):
     batch_size = 20
     new_len = []
+    valid_new_len = []
     if len(data_ID) % batch_size == 0: # the total number of events
         flags = int(len(data_ID) / FLAGS.batch_size)
     else:
@@ -531,10 +570,75 @@ def get_new_len(tokenizer, bert, rdm_model, cm_model, FLAGS, cuda):
                 [batchsize, -1, 2]
             )
             isStop = stopScores.argmax(axis=-1).cpu().numpy()
-            new_len.extend([iS.argmax()+1 if iS.argmax() <= x_len[i] and iS.max() ==1 else x_len[i] for i, iS in enumerate(isStop)])
+
+            tmp_len = [iS.argmax()+1 if (iS.max() ==1 and (iS.argmax()+1)<x_len[iS_idx]) else x_len[iS_idx] for iS_idx, iS in enumerate(isStop)]
+
+            for t_idx in range(len(tmp_len)):
+                try:
+                    assert tmp_len[t_idx] <= x_len[t_idx]
+                except:
+                    print("i:", t_idx)
+                    print("new_len:", tmp_len)
+                    print("data_len:", x_len)
+                    raise
+
+            new_len.extend(tmp_len)
+
+    batchsize = 20
+    t_steps = int(len(valid_data_ID)/batchsize)
+    for step in range(t_steps):
+        x = []
+        with torch.no_grad():
+            for i in range(batchsize):
+                seq_x = [
+                    tokenizer.encode(
+                        data[valid_data_ID[step*batchsize+i]]['text'][j],
+                        add_special_tokens=True
+                    )
+                    for j in range(valid_data_len[step*batchsize+i])
+                ]
+                x.append(seq_x)
+            x_len = valid_data_len[step*batchsize:(step*batchsize+batchsize)]
+            sent_tensors, attn_mask, seq_len = rdm_data2bert_tensors(x, cuda)
+            bert_outs = bert(sent_tensors, attention_mask=attn_mask)
+            pooled_sents = [bert_outs[1][sum(seq_len[:idx]):sum(seq_len[:idx])+seq_len[idx]] for idx, s_len in enumerate(seq_len)]
+            x_emb = rnn_utils.pad_sequence(pooled_sents, batch_first=True).unsqueeze(-2)
+            batchsize, max_seq_len, max_sent_len, emb_dim = x_emb.shape
+            rdm_hiddens = rdm_model(x_emb)
+            batchsize, _, _ = rdm_hiddens.shape
+            rdm_outs = torch.cat(
+                [ rdm_hiddens[i][x_len[i]-1] for i in range(batchsize)] 
+                # a list of tensor, where the ndim of tensor is 1 and the shape of tensor is [hidden_size]
+            ).reshape(
+                [-1, rdm_model.hidden_dim]
+            )
+            stopScores = cm_model.Classifier(
+                    nn.functional.relu(
+                        cm_model.DenseLayer(
+                            rdm_hiddens.reshape([-1, rdm_model.hidden_dim])
+                    )
+                )
+            ).reshape(
+                [batchsize, -1, 2]
+            )
+            isStop = stopScores.argmax(axis=-1).cpu().numpy()
+
+            tmp_len = [iS.argmax()+1 if (iS.max() ==1 and (iS.argmax()+1)<x_len[iS_idx]) else x_len[iS_idx] for iS_idx, iS in enumerate(isStop)]
+
+            for t_idx in range(len(tmp_len)):
+                try:
+                    assert tmp_len[t_idx] <= x_len[t_idx]
+                except:
+                    print("i:", t_idx)
+                    print("new_len:", tmp_len)
+                    print("data_len:", x_len)
+                    raise
+        valid_new_len.extend(tmp_len)
+
+
     print("max_new_len:", max(new_len))
     print("mean_new_len:", sum(new_len)*1.0/len(new_len))
-    return new_len[:len(data_len)]
+    return new_len[:len(data_len)], valid_new_len[:len(valid_data_len)]
 #　先计算一个批次，这个批次会改变，直到不能再变
 # 有两种情况需要改变:
 #   第一，某个序列经过ｃｍ模型判定，他可以停止了
