@@ -456,24 +456,22 @@ def get_reward_v1(isStop, mss, ssq, ids, seq_states, cm_model, rdm_hiddens_seq):
                 reward_counter += 1 # more number of correct prediction, more rewards
                 r = 1 + min(FLAGS.reward_rate * math.log(reward_counter), 10)
                 reward[i] = r   
-                with torch.no_grad():
-                    subsequent_score = cm_model.Classifier(
-                        nn.functional.relu(
-                            cm_model.DenseLayer(
-                                rdm_hiddens_seq[ids[i]]
+                if data_len[ids[i]] > seq_states[i]:
+                    with torch.no_grad():
+                        subsequent_score = cm_model.Classifier(
+                            nn.functional.relu(
+                                cm_model.DenseLayer(
+                                    rdm_hiddens_seq[ids[i]]
+                                )
                             )
-                        )
-                    )               
-                torch.cuda.empty_cache()
-                print("data_len:", data_len[ids[i]])
-                print("subsequent_score:", subsequent_score.shape)
-
-                for j in range(seq_states[i], data_len[ids[i]]):
-                    if subsequent_score[j][0] > subsequent_score[j][1]:
-                        reward[i] += -20
-                        break
-                    else:
-                        reward[i] +=  15.0/(data_len[i] - seq_states[i])
+                        )               
+                    torch.cuda.empty_cache()
+                    for j in range(seq_states[i], data_len[ids[i]]):
+                        if subsequent_score[j][0] > subsequent_score[j][1]:
+                            reward[i] += -20
+                            break
+                        else:
+                            reward[i] +=  15.0/data_len[ids[i]]
             else:
                 reward[i] = -100
             Q_Val[i] = reward[i]
