@@ -206,7 +206,7 @@ def sent_list2bert_tensors(sent_list, cuda):
 
 
 def TrainRDMModel(rdm_model, bert, rdm_classifier, 
-                    tokenizer, t_steps, stage=0, new_data_len=[], logger=None, 
+                    tokenizer, t_steps, stage=0, new_data_len=[], valid_new_len=[], logger=None, 
                         log_dir="RDMBertTrain", cuda=True):
     batch_size = 20
     max_gpu_batch = 5 #cannot load a larger batch into the limited memory, but we could  accumulates grads
@@ -291,7 +291,7 @@ def TrainRDMModel(rdm_model, bert, rdm_classifier,
                 sum_loss, sum_acc,
                 ))
             if step%100 == 99:
-                valid_acc = accuracy_on_valid_data(bert, rdm_model, rdm_classifier, [], tokenizer)
+                valid_acc = accuracy_on_valid_data(bert, rdm_model, rdm_classifier, valid_new_len, tokenizer)
                 if valid_acc > best_valid_acc:
                     print("valid_acc:", valid_acc)
                     writer.add_scalar('Valid Accuracy', valid_acc, step)
@@ -345,6 +345,7 @@ def TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, stage, t_
     else:
         flags = int(len(data_ID) / FLAGS.batch_size) + 1
 
+    rdm_hiddens_seq = []
     for i in range(flags):
         with torch.no_grad():
             x, x_len, y = get_df_batch(i, batch_size, tokenizer=tokenizer)
@@ -355,17 +356,20 @@ def TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, stage, t_
             batchsize, max_seq_len, max_sent_len, emb_dim = x_emb.shape
             rdm_hiddens = rdm_model(x_emb)
             batchsize, _, _ = rdm_hiddens.shape
-            rdm_outs = torch.cat(
-                [ rdm_hiddens[i][x_len[i]-1] for i in range(batchsize)] 
-                # a list of tensor, where the ndim of tensor is 1 and the shape of tensor is [hidden_size]
-            ).reshape(
-                [-1, rdm_model.hidden_dim]
-            )
+            tmp_hiddens = [ rdm_hiddens[i][:x_len[i]] for i in range(batchsize)] 
+
+            rdm_hiddens_seq.extend(tmp_hiddens)
             print("batch %d"%i)
             if len(ssq) > 0:
-                ssq.extend([rdm_classifier(h) for h in rdm_hiddens])
+                ssq.extend([rdm_classifier(h) for h in tmp_hiddens])
             else:
-                ssq = [rdm_classifier(h) for h in rdm_hiddens]
+                ssq = [rdm_classifier(h) for h in tmp_hiddens]
+    del rdm_hiddens, tmp_hiddens
+    torch.cuda.empty_cache()
+
+    # with open('cached_ssq.pickle', 'wb') as handle:
+    #     pickle.dump(ssq, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
     print(get_curtime() + " Now Start RL training ...")
 
     counter = 0
@@ -374,7 +378,7 @@ def TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, stage, t_
 
     while True:
         if counter > FLAGS.OBSERVE:
-        # if counter > 20:
+        # squeif counter > 20:
             sum_rw += rw.mean()
             if counter % 200 == 0:
                 sum_rw = float(sum_rw) / 200
@@ -416,15 +420,15 @@ def TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, stage, t_
             if seq_states[j] == data_len[ids[j]]:
                 isStop[j] = 1
 
-        rw, QVal = get_reward(isStop, mss, ssq, ids, seq_states)
+        rw, QVal = get_reward_0(isStop, mss, ssq, ids, seq_states)
         if counter > FLAGS.OBSERVE:
             print("step:", counter - FLAGS.OBSERVE, ", reward:", rw.mean())
             print("step:", counter - FLAGS.OBSERVE, ", reward:", QVal.mean())
             writer.add_scalar('reward', rw.mean(), counter - FLAGS.OBSERVE)
         for j in range(FLAGS.batch_size):
             D.append((state[0][j], input_x[j], isStop[j], QVal[j]))
-            if len(D) > FLAGS.max_memory:
-                D.popleft()
+            # if len(D) > FLAGS.max_memory:
+            #     D.popleft()
 
         state = mNewState
         for j in range(FLAGS.batch_size):
@@ -495,7 +499,7 @@ for i in range(20):
         else:
             TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, i, 0.5, 20000, "BertERD/", None, FLAGS, cuda=True)
     else:
-        TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, i, 0.5, 1000, "BertERD/", None, FLAGS, cuda=True)
+        TrainCMModel(bert, rdm_model, rdm_classifier, cm_model, tokenizer, i, 0.5, 2000, "BertERD/", None, FLAGS, cuda=True)
     torch.save(
         {
             "bert":bert.state_dict(),
@@ -506,10 +510,12 @@ for i in range(20):
         erd_save_as
     )
     print("iter:", i, ", train cm model completed!")
-    new_len = get_new_len(tokenizer, bert, rdm_model, cm_model, FLAGS, cuda=True)
+    new_len, valid_new_len = get_new_len(tokenizer, bert, rdm_model, cm_model, FLAGS, cuda=True)
     print("after new len:")
+    print("new_data_len:", new_len)
+    print("valid_new_len:", valid_new_len)
     TrainRDMModel(rdm_model, bert, rdm_classifier, 
-                    tokenizer, 500, i, new_data_len=new_len, logger=None, 
+                    tokenizer, 500, i, new_data_len=new_len, valid_new_len=valid_new_len, logger=None, 
                         log_dir=log_dir)
 
 
