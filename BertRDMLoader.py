@@ -516,12 +516,12 @@ def padding_sequence(sequences):
 
 # In[30]:
 
-def get_RL_Train_batch(D, FLAGS, cuda=False):
-    m_batch = random.sample(D, FLAGS.batch_size)
-    s_state = torch.zeros([1, FLAGS.batch_size, FLAGS.hidden_dim], dtype=torch.float32)
+def get_RL_Train_batch(D, FLAGS, batch_size, cuda=False):
+    m_batch = random.sample(D, batch_size)
+    s_state = torch.zeros([1, batch_size, FLAGS.hidden_dim], dtype=torch.float32)
     s_x = []
-    s_isStop = torch.zeros([FLAGS.batch_size, FLAGS.action_num], dtype=torch.float32)
-    s_rw = torch.zeros([FLAGS.batch_size], dtype=torch.float32)
+    s_isStop = torch.zeros([batch_size, FLAGS.action_num], dtype=torch.float32)
+    s_rw = torch.zeros([batch_size], dtype=torch.float32)
     for i in range(FLAGS.batch_size):
         s_state[0][i] = m_batch[i][0]
         s_x.append(m_batch[i][1])
