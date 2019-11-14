@@ -382,11 +382,12 @@ def get_df_batch(start, batchsize, new_data_len=[], tokenizer=None):
 def get_rl_batch(ids, seq_states, stop_states, counter_id, start_id, FLAGS, tokenizer=None):
 #     input_x = np.zeros([FLAGS.batch_size, FLAGS.max_sent_len, FLAGS.max_char_num], dtype=np.float32)
     input_x = []  # [batch_size, sent_len]
-    input_y = np.zeros([FLAGS.batch_size, FLAGS.class_num], dtype=np.float32)
-    assert(len(ids)==FLAGS.batch_size)
+
+    batch_size = len(ids)
+    input_y = np.zeros([batch_size, FLAGS.class_num], dtype=np.float32)
     miss_vec = 0
     total_data = len(data_len)
-    for i in range(FLAGS.batch_size):
+    for i in range(batch_size):
         # seq_states:records the id of a sentence in a sequence
         # stop_states: records whether the sentence is judged by the program
         if stop_states[i] == 1 or seq_states[i] >= data_len[ids[i]]: 
@@ -425,6 +426,23 @@ def get_rl_batch(ids, seq_states, stop_states, counter_id, start_id, FLAGS, toke
 
 # In[26]:
 
+def get_reward_0(isStop, ss, pys, ids, seq_ids):
+    global reward_counter
+    reward = torch.zeros([len(isStop)], dtype=torch.float32)
+    Q_Val = torch.zeros([len(isStop)], dtype= torch.float32)
+    for i in range(len(isStop)):
+        if isStop[i] == 1:
+            if pys[ids[i]][seq_ids[i]-1].argmax() == np.argmax(data_y[ids[i]]):
+                reward_counter += 1 # more number of correct prediction, more rewards
+                r = 1 + FLAGS.reward_rate * math.log(reward_counter)
+                reward[i] = r   
+            else:
+                reward[i] = -100
+            Q_Val[i] = reward[i]
+        else:
+            reward[i] = -0.01 
+            Q_Val[i] = reward[i] + 0.99 * max(ss[i])
+    return reward, Q_Val
 
 def get_reward(isStop, ss, pys, ids, seq_ids):
     global reward_counter
