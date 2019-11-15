@@ -522,7 +522,7 @@ def get_RL_Train_batch(D, FLAGS, batch_size, cuda=False):
     s_x = []
     s_isStop = torch.zeros([batch_size, FLAGS.action_num], dtype=torch.float32)
     s_rw = torch.zeros([batch_size], dtype=torch.float32)
-    for i in range(FLAGS.batch_size):
+    for i in range(batch_size):
         s_state[0][i] = m_batch[i][0]
         s_x.append(m_batch[i][1])
         s_isStop[i][m_batch[i][2]] = 1
@@ -531,6 +531,21 @@ def get_RL_Train_batch(D, FLAGS, batch_size, cuda=False):
         return s_state.cuda(), s_x, s_isStop.cuda(), s_rw.cuda()
     else:
         return s_state, s_x, s_isStop, s_rw
+
+def get_RL_Train_batch_V1(D, FLAGS, batch_size, cuda=False):
+    m_batch = random.sample(D, batch_size)
+    rdm_state = torch.zeros([batch_size, FLAGS.hidden_dim], dtype=torch.float32)
+    s_ids = []
+    s_seqStates = []
+    for i in range(batch_size):
+        rdm_state[i] = m_batch[i][0]
+        s_ids.append(m_batch[i][1])
+        s_seqStates.append(m_batch[i][2])
+    if cuda:
+        return rdm_state.cuda(), s_ids, s_seqStates
+    else:
+        return rdm_state, s_ids, s_seqStates
+        
 
 def rdm_data2bert_tensors(data_X, cuda):
     def padding_sent_list(sent_list):
