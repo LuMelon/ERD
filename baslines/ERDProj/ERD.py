@@ -1,197 +1,21 @@
 #!/usr/bin/env python
 # coding: utf-8
-
-# In[1]:
-
-
 import sys
-
-
-# In[2]:
-
-
 import torch
-
-
-# In[3]:
-
-
 import importlib
 from tensorboardX import SummaryWriter
 import torch.nn.utils.rnn as rnn_utils
 import pickle
 import tqdm
 import os
-
-
-# In[4]:
-
-
 import torch.nn as nn
-
-
-# In[5]:
-
-
+from collections import deque
 sys.path.append(".")
-
-
-# In[6]:
-
-
-from dataUtils import *
-
-
-# In[7]:
-
-
+from dataUtilsV0 import *
 import json
 
 
-# ### 数据集分析
-
-# In[9]:
-
-
-with open("../../config.json", "r") as cr:
-    dic = json.load(cr)
-
-class adict(dict):
-    ''' Attribute dictionary - a convenience data structure, similar to SimpleNamespace in python 3.3
-        One can use attributes to read/write dictionary content.
-    '''
-    def __init__(self, *av, **kav):
-        dict.__init__(self, *av, **kav)
-        self.__dict__ = self
-
-FLAGS = adict(dic)
-
-
-# In[10]:
-
-
-load_data("/home/hadoop/pheme-rnr-dataset/", FLAGS)
-
-
-# In[11]:
-
-
-del data
-del data_ID
-del data_y
-del data_len
-from dataUtils import data
-from dataUtils import data_ID
-from dataUtils import data_y
-from dataUtils import data_len
-
-
-# In[12]:
-
-
-import time
-
-
-# In[13]:
-
-
-t_hour = [(data[data_ID[i]]['created_at'][-1]-data[data_ID[i]]['created_at'][0])/3600.0 for i in range(len(data_ID))] 
-
-
-# In[14]:
-
-
-import seaborn as sns
-
-
-# In[41]:
-
-
-def plot_hist(x_tuples, bins, xlabel, ylabel, legends, title):
-    colors = [(1, 0, 0), (1, 1, 0), (0, 1, 0,), (0, 0, 1)]
-    def normfun(x,mu,sigma):
-        pdf = np.exp(-((x - mu)**2)/(2*sigma**2)) / (sigma * np.sqrt(2*np.pi))
-        return pdf
-    plt.xlabel(xlabel)
-    plt.ylabel(ylabel)
-    plt.title(title)
-#     plt.xlim(0, 200)
-    for i in range(len(x_tuples)):
-        sns.distplot(x_tuples[i], bins=bins, rug=False, kde=True, hist=True, norm_hist=True, label=legends[i], hist_kws={"histtype": "step", "linewidth": 2,
-        "alpha": 1}, kde_kws={"color": colors[0], "lw": 0, "label": ""})
-
-
-# In[16]:
-
-
-import matplotlib.pyplot as plt
-
-
-# In[28]:
-
-
-len(t_hour), max(t_hour), min(t_hour)
-
-
-# In[38]:
-
-
-max(data_len), min(data_len)
-
-
-# In[42]:
-
-
-plot_hist([data_len], 1000, "tweets", "percentage", [""], "statics of the dataset")
-
-
-# ### 切割数据集
-
-# In[43]:
-
-
-len(data_ID), len(data_y), len(data_len)
-
-
-# In[52]:
-
-
-new_y =[]
-new_ID = []
-new_len = []
-
-for l, ID, y in zip(data_len, data_ID, data_y):
-    if l > 5:
-        new_len.append(l)
-        new_ID.append(ID)
-        new_y.append(y)
-
-
-# In[53]:
-
-
-len(new_ID), len(new_len), len(new_y)
-
-
-# In[62]:
-
-
-with open('data/data_dict.txt', 'wb') as handle:
-    pickle.dump(data, handle, protocol=pickle.HIGHEST_PROTOCOL)
-np.save("data/data_ID.npy", np.array(new_ID)[:-500])
-np.save("data/data_len.npy", np.array(new_len)[:-500])
-np.save("data/data_y.npy", np.array(new_y)[:-500])
-
-np.save("data/test_data_ID.npy", np.array(new_ID)[-500:])
-np.save("data/test_data_len.npy", np.array(new_len)[-500:])
-np.save("data/test_data_y.npy", np.array(new_y)[-500:])
-
-
 # ### 模型训练与测试
-
-# In[8]:
-
-
 class pooling_layer(nn.Module):
     def __init__(self, input_dim, output_dim):
         super(pooling_layer, self).__init__()
@@ -200,19 +24,6 @@ class pooling_layer(nn.Module):
         self.output_dim = output_dim
         
     def forward(self, inputs, cuda=True):
-        # [batchsize, max_seq_len, max_word_num, input_dim] 
-#         batch_size, max_seq_len, max_word_num, input_dim = inputs.shape
-#         assert(input_dim == self.input_dim)
-#         t_inputs = inputs.reshape([-1, self.input_dim])
-#         return self.linear(t_inputs).reshape(
-            
-#             [-1, max_word_num, self.output_dim]
-        
-#         ).max(axis=1)[0].reshape(
-        
-#             [-1, max_seq_len, self.output_dim]
-        
-#         )
         inputs_sent = [torch.cat([self.linear(sent_tensor.cuda() if cuda else sent_tensor).max(axis=0)[0].unsqueeze(0) for sent_tensor in seq]) for seq in inputs]
         seqs = torch.nn.utils.rnn.pad_sequence(inputs_sent, batch_first=True)
         return seqs
@@ -242,14 +53,63 @@ class RDM_Model(nn.Module):
         except:
             print("Error:", pool_feature.shape, init_states.shape)
             raise
-        # hidden_outs = [df_outputs[i][:x_len[i]] for i in range(batchsize)]
-        # final_outs = [df_outputs[i][x_len[i]-1] for i in range(batchsize)]
-        # return hidden_outs, final_outs
         return df_outputs
 
+class CM_Model_V1(nn.Module):
+    def __init__(self, hidden_dim, action_num):
+        super(CM_Model_V1, self).__init__()
+        self.hidden_dim = hidden_dim
+        self.action_num = action_num
+        self.DenseLayer = nn.Linear(self.hidden_dim, 64)
+        self.Classifier = nn.Linear(64, self.action_num)
+        
+    def forward(self, rdm_state):
+        """
+        rdm_state: [batchsize, hidden_dim]
+        """
+        batchsize, hidden_dim = rdm_state.shape
+        rl_h1 = nn.functional.relu(
+            self.DenseLayer(
+                rdm_state
+            )
+        )
+        stopScore = self.Classifier(rl_h1)
+        isStop = stopScore.argmax(axis=1)
+        return stopScore, isStop
 
-# In[11]:
-
+class CM_Model(nn.Module):
+    def __init__(self, sentence_embedding_dim, hidden_dim, action_num):
+        super(CM_Model, self).__init__()
+        self.sentence_embedding_dim = sentence_embedding_dim
+        self.hidden_dim = hidden_dim
+        self.action_num = action_num
+#         self.PoolLayer = pooling_layer(self.embedding_dim, 
+#                                             self.hidden_dim)
+        self.DenseLayer = nn.Linear(self.hidden_dim, 64)
+        self.Classifier = nn.Linear(64, self.action_num)
+        
+    def forward(self, rdm_model, rl_input, rl_state):
+        """
+        rl_input: [batchsize, max_word_num, sentence_embedding_dim]
+        rl_state: [1, batchsize, hidden_dim]
+        """
+        assert(rl_input.ndim==3)
+        batchsize, max_word_num, embedding_dim = rl_input.shape
+        rl_output, rl_new_state = rdm_model.gru_model(
+                                            rl_input, 
+                                            rl_state
+                                        )
+        rl_h1 = nn.functional.relu(
+            self.DenseLayer(
+#                 rl_state.reshape([len(rl_input), self.hidden_dim]) #it is not sure to take rl_state , rather than rl_output, as the feature
+                rl_output.reshape(
+                    [len(rl_input), self.hidden_dim]
+                )
+            )
+        )
+        stopScore = self.Classifier(rl_h1)
+        isStop = stopScore.argmax(axis=1)
+        return stopScore, isStop, rl_new_state
 
 def Count_Accs(ylabel, preds):
     correct_preds = np.array(
@@ -270,10 +130,6 @@ def Count_Accs(ylabel, preds):
     else:
         neg_acc = 0
     return acc, pos_acc, neg_acc, y_idxs, pos_idxs, neg_idxs, correct_preds
-
-
-# In[12]:
-
 
 def TrainRDMModel(rdm_model, sent_pooler, rdm_classifier, 
                     t_steps=100, stage=0, new_data_len=[], valid_new_len=[], logger=None, 
@@ -352,7 +208,7 @@ def TrainRDMModel(rdm_model, sent_pooler, rdm_classifier,
                     torch.save(
                         {
                             "rmdModel":rdm_model.state_dict(),
-                            "bert":sent_pooler.state_dict(),
+                            "sent_pooler":sent_pooler.state_dict(),
                             "rdm_classifier": rdm_classifier.state_dict()
                         },
                         rdm_save_as
@@ -362,37 +218,157 @@ def TrainRDMModel(rdm_model, sent_pooler, rdm_classifier,
     print(get_curtime() + " Train df Model End.")
     return ret_acc
 
+def TrainCMModel(sent_pooler, rdm_model, rdm_classifier, cm_model, stage, t_rw, t_steps, log_dir, logger, FLAGS, cuda=True):
+    batch_size = 20
+    t_acc = 0.9
+    ids = np.array(range(batch_size), dtype=np.int32)
+    seq_states = np.zeros([batch_size], dtype=np.int32)
+    isStop = np.zeros([batch_size], dtype=np.int32)
+    max_id = batch_size
+    df_init_states = torch.zeros([1, batch_size, rdm_model.hidden_dim], dtype=torch.float32).cuda()
+    writer = SummaryWriter(log_dir, filename_suffix="_ERD_CM_stage_%3d"%stage)
+    state = df_init_states
+    D = deque()
+    ssq = []
+    print("in RL the begining")
+    rl_optim = torch.optim.Adam([{'params':cm_model.parameters(), 'lr':1e-5}])
+    # get_new_len(sess, mm)
+    data_ID = get_data_ID()
+
+    if len(data_ID) % batch_size == 0: # the total number of events
+            flags = int(len(data_ID) / FLAGS.batch_size)
+    else:
+        flags = int(len(data_ID) / FLAGS.batch_size) + 1
+
+    rdm_hiddens_seq = []
+    for i in range(flags):
+        with torch.no_grad():
+            x, x_len, y = get_df_batch(i, batch_size)
+            seq = sent_pooler(x)
+            rdm_hiddens = rdm_model(seq)
+            batchsize, _, _ = rdm_hiddens.shape
+            tmp_hiddens = [ rdm_hiddens[i][:x_len[i]] for i in range(batchsize)] 
+
+            rdm_hiddens_seq.extend(tmp_hiddens)
+            print("batch %d"%i)
+            if len(ssq) > 0:
+                ssq.extend([rdm_classifier(h) for h in tmp_hiddens])
+            else:
+                ssq = [rdm_classifier(h) for h in tmp_hiddens]
+            torch.cuda.empty_cache()
+    del rdm_hiddens, tmp_hiddens
+
+    print(get_curtime() + " Now Start RL training ...")
+
+    counter = 0
+    sum_rw = 0.0 # sum of rewards
+    data_len = get_data_len()
+
+    while True:
+    #         if counter > FLAGS.OBSERVE:
+        if counter > 1000:
+            if counter > t_steps:
+                print("Retch The Target Steps")
+                break
+            rdm_state, s_ids, s_seq_states = get_RL_Train_batch_V1(D, FLAGS, batch_size, cuda)
+            print("s_seq_states:", s_seq_states)
+            with torch.no_grad():
+                s_stopScore, s_isStop = cm_model(rdm_state)                
+                rw, q_val = get_reward_01(s_isStop, s_stopScore, ssq, s_ids, s_seq_states)
+            
+            s_isStop = s_stopScore.argsort()
+            for j in range(batch_size):
+                if random.random() < FLAGS.random_rate:
+                    s_isStop[j][int(torch.rand(2).argmax())] = 1 # 设置了一个随机的干扰。
+                if seq_states[j] == data_len[s_ids[j]]:
+                    s_isStop[j] = 1
+
+            t_stopScore, t_isStop = cm_model(rdm_state)
+            out_action = (t_stopScore*s_isStop.float()).sum(axis=1)
+            rl_cost = torch.mean((q_val.cuda() - out_action)*(q_val.cuda() - out_action))
+            rl_cost.backward()
+            torch.cuda.empty_cache()
+            rl_optim.step()
+            print("RL Cost:", rl_cost)
+            writer.add_scalar('RL Cost', rl_cost, counter - FLAGS.OBSERVE)
+
+        ids, seq_states, max_id = get_rl_batch(ids, seq_states, max_id, 0, FLAGS)
+        if counter > FLAGS.OBSERVE:
+            print("step:", counter - FLAGS.OBSERVE, ", reward:", rw.mean())
+            print("step:", counter - FLAGS.OBSERVE, ", reward:", q_val.mean())
+            print("rw:", rw)
+            print("q_val", q_val)
+            print("stopScore:", t_stopScore)
+            writer.add_scalar('reward', rw.mean(), counter - FLAGS.OBSERVE)
+        for j in range(batch_size):
+            D.append((rdm_hiddens_seq[ids[j]][seq_states[j]-1], ids[j], seq_states[j]))
+            if len(D) > FLAGS.max_memory:
+                D.popleft()
+        counter += 1
 
 # In[13]:
 
 
 load_data_fast()
 
-
-# In[9]:
-
-
 rdm_model = RDM_Model(300, 300, 256, 0.2).cuda()
 sent_pooler = pooling_layer(300, 300).cuda()
-
-
-# In[10]:
-
-
 rdm_classifier = nn.Linear(256, 2).cuda()
+cm_model = CM_Model_V1(256, 2).cuda()
+
+log_dir = os.path.join(sys.path[0], "ERD/")
+
+with open("config.json", "r") as cr:
+    dic = json.load(cr)
+
+class adict(dict):
+    ''' Attribute dictionary - a convenience data structure, similar to SimpleNamespace in python 3.3
+        One can use attributes to read/write dictionary content.
+    '''
+    def __init__(self, *av, **kav):
+        dict.__init__(self, *av, **kav)
+        self.__dict__ = self
+
+FLAGS = adict(dic)
+
+# #### 导入模型预训练参数
+pretrained_file = "%s/ERD_best.pkl"%log_dir
+if os.path.exists(pretrained_file):
+    checkpoint = torch.load(pretrained_file)
+    sent_pooler.load_state_dict(checkpoint['sent_pooler'])
+    rdm_model.load_state_dict(checkpoint["rmdModel"])
+    rdm_classifier.load_state_dict(checkpoint["rdm_classifier"])
+else:
+    TrainRDMModel(rdm_model, sent_pooler, rdm_classifier, 
+                    t_steps=5000, stage=0, new_data_len=[], valid_new_len=[], logger=None, 
+                        log_dir=log_dir, cuda=True)
 
 
-# In[14]:
 
-
-TrainRDMModel(rdm_model, sent_pooler, rdm_classifier, 
-                    t_steps=10000, stage=0, new_data_len=[], valid_new_len=[], logger=None, 
-                        log_dir="RDMBertTrain", cuda=True)
-
-
-# ### 原始CM模型
-
-# In[ ]:
+#### 标准ERD模型
+for i in range(20):
+    erd_save_as = '%s/erdModel_epoch%03d.pkl'% (log_dir , i)
+    if i==0:
+        TrainCMModel(sent_pooler, rdm_model, rdm_classifier, cm_model, 0, 0.5, 20000, log_dir, None, FLAGS, cuda=True)
+    else:
+        TrainCMModel(sent_pooler, rdm_model, rdm_classifier, cm_model, 0, 0.5, 2000, log_dir, None, FLAGS, cuda=True)
+    torch.save(
+        {
+            "sent_pooler":sent_pooler.state_dict(),
+            "rmdModel":rdm_model.state_dict(),
+            "rdm_classifier": rdm_classifier.state_dict(),
+            "cm_model":cm_model.state_dict()
+        },
+        erd_save_as
+    )
+    print("iter:", i, ", train cm model completed!")
+    new_len, valid_new_len = get_new_len(sent_pooler, rdm_model, cm_model, FLAGS, cuda=True)
+    print("after new len:")
+    print("new_data_len:", new_len)
+    print("valid_new_len:", valid_new_len)
+    TrainRDMModel(rdm_model, sent_pooler, rdm_classifier, 
+                    t_steps=1000, stage=0, new_data_len=[], valid_new_len=[], logger=None, 
+                        log_dir=log_dir, cuda=True)
 
 
 
