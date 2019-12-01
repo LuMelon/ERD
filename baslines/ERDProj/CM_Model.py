@@ -237,3 +237,118 @@ def TrainCMModel_V2(sent_pooler, rdm_model, rdm_classifier, cm_model, stage, t_r
         # print("bias grad:", cm_model.Classifier.bias.grad)
     print(get_curtime() + " Train df Model End.")
     return ret_acc    
+
+
+def TrainCMModel_V3(sent_pooler, rdm_model, rdm_classifier, cm_model, stage, t_rw, t_steps, log_dir, logger, FLAGS, cuda=True):
+    batch_size = 20
+    t_acc = 0.9
+    gamma = 1.0
+    lambda1 = -1.0
+    lambda2 = 0.0 #regularizer
+    sum_loss = 0.0
+    sum_acc = 0.0
+    t_acc = 0.9
+    ret_acc = 0.0
+    init_states = torch.zeros([1, batch_size, rdm_model.hidden_dim], dtype=torch.float32).cuda()
+    weight = torch.tensor([2.0, 1.0], dtype=torch.float32).cuda()
+    loss_fn = nn.CrossEntropyLoss(weight=weight, reduction='sum')
+    optim = torch.optim.Adagrad([
+                                {'params': sent_pooler.parameters(), 'lr': 2e-3},
+                                {'params': rdm_model.parameters(), 'lr': 2e-3},
+                                {'params': rdm_classifier.parameters(), 'lr': 2e-3},
+                                {'params': cm_model.parameters(), 'lr':2e-3}
+                             ]
+    )
+    
+    writer = SummaryWriter(log_dir, filename_suffix="_ERD_CM_stage_%3d"%stage)
+    best_valid_acc = 0.0
+
+    rw_arr = np.zeros(10)
+    len_arr = np.zeros(10)
+    for step in range(t_steps):
+            x, x_len, y = get_df_batch(step*batch_size, batch_size)        
+        # for rep in range(100):
+            optim.zero_grad()
+            seq = sent_pooler(x)
+            rdm_hiddens = rdm_model(seq)
+
+            with torch.no_grad():
+                batchsize, _, _ = rdm_hiddens.shape
+                rdm_outs = torch.cat(
+                    [ rdm_hiddens[i][x_len[i]-1].unsqueeze(0) for i in range(batchsize)] 
+                    # a list of tensor, where the ndim of tensor is 1 and the shape of tensor is [hidden_size]
+                )
+                rdm_scores = rdm_classifier(
+                    rdm_outs
+                )
+                rdm_preds = rdm_scores.argmax(axis=1)
+                y_label = torch.tensor(y).argmax(axis=1).cuda() if cuda else torch.tensor(y).argmax(axis=1)
+                acc, _, _, _, _, _, _ = Count_Accs(y_label, rdm_preds)
+                loss = loss_fn(rdm_scores, y_label)
+            
+            batchsize, max_seq_len, _ = rdm_hiddens.shape
+            stopScore, isStop = cm_model(rdm_hiddens.reshape(-1, 256))
+            isStop = isStop.reshape([batchsize, max_seq_len, -1])
+            stopProb = stopScore.reshape([batchsize, max_seq_len, -1]).softmax(axis=-1)         
+            E_rw = torch.zeros(len(x_len)).cuda()
+            prob = torch.ones(len(x_len)).cuda()
+            sum_len = 0.0
+
+            preds_list = []
+            label_list = []
+
+            for j in range(len(x_len)):
+                sum_rw = 0.0
+                start = random.randint(0, x_len[j]-1)
+                delay_punish = np.log( np.arange(1, x_len[j]+1)*1.0/(x_len[j]+1) )
+                for t in range(start, x_len[j]):
+                    rnd = random.random()
+                    # pdb.set_trace()
+                    if rnd > stopProb[j][t][1]:
+                        prob[j] *= stopProb[j][t][0]            
+                    else:
+                        prob[j] *= stopProb[j][t][1]
+                        rnd2 = random.random()
+                        if  rnd2 < 0.4:
+                            break
+                y_label = torch.tensor(y[j]).repeat(x_len[j]-t, 1).cuda()
+                preds = rdm_classifier(rdm_hiddens[j][t:x_len[j]])
+                preds_list.append(preds)
+                label_list.append(y_label)
+                # pred_loss = loss_fn(preds, y_label.argmax(axis=1))
+                # sum_rw = -1*delay_punish[:t].sum() + pred_loss
+                sum_rw = -1*delay_punish[:t].sum() 
+                sum_len += (t-start+1)*1.0/x_len[j]
+                E_rw[j] = prob[j]*sum_rw
+
+            pred_tensor = torch.cat(preds_list)
+            label_tensor = torch.cat(label_list)
+            
+            loss_back = E_rw.mean() + loss_fn(pred_tensor, label_tensor.argmax(axis=1))
+            loss_back.backward()
+            optim.step()      
+
+            # pdb.set_trace()
+            rw_arr[int(step%10)] = E_rw.mean()
+            len_arr[int(step%10)] = sum_len*1.0/batch_size
+
+            
+            if step%10 == 0:  
+                # print('%3d | %d , train_loss/Expected Reward = %6.8f/%6.7f,  RDM_Loss/RDM Accuracy = %6.8f/%6.7f, mean_len = %2.3f'             % (step, t_steps, 
+                #         loss_back, E_rw.mean(), loss, acc, sum_len*1.0/batch_size
+                #         ))
+                print('%3d | %d , train_loss/Expected Reward = %6.8f/%6.7f,  RDM_Loss/RDM Accuracy = %6.8f/%6.7f, mean_len = %2.3f'             % (step, t_steps, 
+                        loss_back, rw_arr.mean(), loss, acc, len_arr.mean()
+                        ))
+
+            writer.add_scalar('RDM Loss', loss, step)
+            writer.add_scalar('RDM Accuracy', acc, step)
+            writer.add_scalar('Train Loss', loss_back, step)
+            writer.add_scalar('Expected Reward', E_rw.mean(), step)
+
+            torch.cuda.empty_cache()
+        
+        # print("weight grad:", cm_model.Classifier.weight.grad)
+        # print("bias grad:", cm_model.Classifier.bias.grad)
+    print(get_curtime() + " Train df Model End.")
+    return ret_acc    

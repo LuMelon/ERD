@@ -361,9 +361,9 @@ FLAGS = adict(dic)
 for i in range(20):
     erd_save_as = '%s/erdModel_epoch%03d.pkl'% (log_dir , i)
     if i==0:
-        TrainCMModel_V2(sent_pooler, rdm_model, rdm_classifier, cm_model, 0, 0.5, 20000, log_dir, None, FLAGS, cuda=True)
+        TrainCMModel_V3(sent_pooler, rdm_model, rdm_classifier, cm_model, 0, 0.5, 20000, log_dir, None, FLAGS, cuda=True)
     else:
-        TrainCMModel_V2(sent_pooler, rdm_model, rdm_classifier, cm_model, 0, 0.5, 2000, log_dir, None, FLAGS, cuda=True)
+        TrainCMModel_V3(sent_pooler, rdm_model, rdm_classifier, cm_model, 0, 0.5, 2000, log_dir, None, FLAGS, cuda=True)
     torch.save(
         {
             "sent_pooler":sent_pooler.state_dict(),
