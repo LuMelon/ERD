@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 # coding: utf-8
-
 import sys
 import random
 import torch
@@ -376,13 +375,13 @@ for i in range(20):
         erd_save_as
     )
     print("iter:", i, ", train cm model completed!")
-    new_len, valid_new_len = get_new_len(sent_pooler, rdm_model, cm_model, FLAGS, cuda=True)
-    print("after new len:")
-    print("new_data_len:", new_len)
-    print("valid_new_len:", valid_new_len)
-    TrainRDMModel(rdm_model, sent_pooler, rdm_classifier, 
-                    t_steps=1000, stage=0, new_data_len=new_len, valid_new_len=valid_new_len, logger=None, 
-                        log_dir=log_dir, cuda=True)
+    # new_len, valid_new_len = get_new_len(sent_pooler, rdm_model, cm_model, FLAGS, cuda=True)
+    # print("after new len:")
+    # print("new_data_len:", new_len)
+    # print("valid_new_len:", valid_new_len)
+    # TrainRDMModel(rdm_model, sent_pooler, rdm_classifier, 
+    #                 t_steps=1000, stage=0, new_data_len=[], valid_new_len=[], logger=None, 
+    #                     log_dir=log_dir, cuda=True)
 
 
 

@@ -331,41 +331,28 @@ cm_model = CM_Model_V1(256, 2).cuda()
 
 log_dir = os.path.join(sys.path[0], "ERDV4/")
 
-with open("../../config.json", "r") as cr:
-    dic = json.load(cr)
-
-class adict(dict):
-    ''' Attribute dictionary - a convenience data structure, similar to SimpleNamespace in python 3.3
-        One can use attributes to read/write dictionary content.
-    '''
-    def __init__(self, *av, **kav):
-        dict.__init__(self, *av, **kav)
-        self.__dict__ = self
-
-FLAGS = adict(dic)
-
 # #### 导入模型预训练参数
 # pretrained_file = "%s/ERD_best.pkl"%log_dir
-pretrained_file = "ERD/ERD_best.pkl"
+pretrained_file = "%s/ERD_best.pkl"%log_dir
 if os.path.exists(pretrained_file):
     checkpoint = torch.load(pretrained_file)
     sent_pooler.load_state_dict(checkpoint['sent_pooler'])
     rdm_model.load_state_dict(checkpoint["rmdModel"])
     rdm_classifier.load_state_dict(checkpoint["rdm_classifier"])
 else:
-    TrainRDMModel(rdm_model, sent_pooler, rdm_classifier, 
+    TrainRDMModel_V0(rdm_model, sent_pooler, rdm_classifier, 
                     t_steps=5000, stage=0, new_data_len=[], valid_new_len=[], logger=None, 
                         log_dir=log_dir, cuda=True)
 
 
 
 #### 标准ERD模型
-for i in range(20):
+for i in range(2):
     erd_save_as = '%s/erdModel_epoch%03d.pkl'% (log_dir , i)
     if i==0:
-        TrainCMModel_V3(sent_pooler, rdm_model, rdm_classifier, cm_model, 0, 0.5, 20000, log_dir, None, FLAGS, cuda=True)
+        TrainCMModel_V0(sent_pooler, rdm_model, rdm_classifier, cm_model, 0, 0.5, 20000, log_dir, None, FLAGS, cuda=True)
     else:
-        TrainCMModel_V3(sent_pooler, rdm_model, rdm_classifier, cm_model, 0, 0.5, 2000, log_dir, None, FLAGS, cuda=True)
+        TrainCMModel_V0(sent_pooler, rdm_model, rdm_classifier, cm_model, 0, 0.5, 2000, log_dir, None, FLAGS, cuda=True)
     torch.save(
         {
             "sent_pooler":sent_pooler.state_dict(),
@@ -376,11 +363,12 @@ for i in range(20):
         erd_save_as
     )
     print("iter:", i, ", train cm model completed!")
-    new_len, valid_new_len = get_new_len(sent_pooler, rdm_model, cm_model, FLAGS, cuda=True)
+    new_len = get_new_len(sent_pooler, rdm_model, cm_model, FLAGS, cuda=True)
+    valid_new_len = get_new_len_on_valid_data(sent_pooler, rdm_model, cm_model, FLAGS, cuda=True)
     print("after new len:")
     print("new_data_len:", new_len)
     print("valid_new_len:", valid_new_len)
-    TrainRDMModel(rdm_model, sent_pooler, rdm_classifier, 
+    TrainRDMModel_V0(rdm_model, sent_pooler, rdm_classifier, 
                     t_steps=1000, stage=0, new_data_len=new_len, valid_new_len=valid_new_len, logger=None, 
                         log_dir=log_dir, cuda=True)
 

@@ -10,6 +10,10 @@ import re
 import pickle
 import torch
 import torch.nn as nn
+from sklearn.metrics import accuracy_score
+from sklearn.metrics import precision_score
+from sklearn.metrics import recall_score
+
 
 files = []
 data = {}
@@ -21,7 +25,7 @@ valid_data_ID = []
 valid_data_y = []
 valid_data_len = []
 
-with open("word2vec.txt", "rb") as handle:
+with open("/home/hadoop/word2vec.txt", "rb") as handle:
         word2vec = pickle.load(handle)
 print("load glove finished")
 
@@ -33,7 +37,7 @@ import json
 # In[12]:
 
 
-with open("config.json", "r") as cr:
+with open("./config.json", "r") as cr:
     dic = json.load(cr)
 
 class adict(dict):
@@ -57,6 +61,10 @@ def get_data_ID():
 def get_data_len():
     global data_len
     return data_len
+
+def get_valid_data_len():
+    global valid_data_len
+    return valid_data_len
 
 def get_curtime():
     return time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time()))
@@ -104,6 +112,45 @@ def transIrregularWord(line):
     line = re.sub("http(.?)://[^ ]*", "{ a special link }", line)
     return line 
 
+def sentence2wordlist(sentence):
+    txt_l = sentence.split(' ')
+    l = []
+    word_idx = 0
+    while word_idx < len(txt_l):
+        if txt_l[word_idx] == '{':
+            tmp = []
+            while txt_l[word_idx] != '}':
+                tmp.append(txt_l[word_idx])
+                word_idx += 1
+            tmp.append(txt_l[word_idx])
+            word_idx += 1
+            l.append(tmp)
+        else:
+            l.append(txt_l[word_idx])
+            word_idx += 1
+    return l
+
+def wordlist2wordvecs(wordlist):
+    vecs = []
+    for item in wordlist:
+        if isinstance(item, str):
+            try:
+                vec = word2vec[re.sub(r"^[, . ? ! :]*|[, . ? ! :]*$","", item)]
+            except KeyError:
+                vec = word2vec['{'] +word2vec['an'] +  word2vec['unknown'] + word2vec['word'] + word2vec['}']
+            vecs.append(vec)
+        elif isinstance(item, list):
+            vec = word2vec[item[0]]
+            for w in item[1:]:
+                vec = vec + word2vec[w]
+            vecs.append(vec)
+    return vecs
+
+def sentence2wordvecs(sentence):
+    l = sentence2wordlist(sentence)    
+    vecs = wordlist2wordvecs(l)
+    return vecs
+
 
 def load_test_data_fast():
     global data, data_ID, data_len, data_y, eval_flag
@@ -112,6 +159,8 @@ def load_test_data_fast():
     data_ID = np.load("../../data/test_data_ID.npy").tolist()
     data_len = np.load("../../data/test_data_len.npy").tolist()
     data_y = np.load("../../data/test_data_y.npy").tolist()
+    for id in data_ID:
+        data[id]['text'] = [sentence2wordlist(sentence) for sentence in data[id]['text']]
     max_sent = max( map(lambda value: max(map(lambda txt_list: len(txt_list), value['text']) ), list(data.values()) ) )
     print("max_sent:", max_sent, ",  max_seq_len:", max(data_len))
     eval_flag = int(len(data_ID) / 4) * 3
@@ -119,22 +168,25 @@ def load_test_data_fast():
 
 def load_data_fast():
     global data, data_ID, data_len, data_y, valid_data_ID, valid_data_y, valid_data_len
-    with open("dataV0/data_dict.txt", "rb") as handle:
+    with open("data/data_dict.txt", "rb") as handle:
         data = pickle.load(handle)
-    data_ID = np.load("dataV0/data_ID.npy").tolist()
-    data_len = np.load("dataV0/data_len.npy").tolist()
-    data_y = np.load("dataV0/data_y.npy").tolist()
+    data_ID = np.load("data/data_ID.npy").tolist()
+    data_len = np.load("data/data_len.npy").tolist()
+    data_y = np.load("data/data_y.npy").tolist()
     # valid_data_ID = np.load("data/valid_data_ID.npy").tolist()
     # valid_data_len = np.load("data/valid_data_len.npy").tolist()
     # valid_data_y = np.load("data/valid_data_y.npy").tolist()
-    valid_data_ID = np.load("dataV0/test_data_ID.npy").tolist()
-    valid_data_len = np.load("dataV0/test_data_len.npy").tolist()
-    valid_data_y = np.load("dataV0/test_data_y.npy").tolist()
+    valid_data_ID = np.load("data/test_data_ID.npy").tolist()
+    valid_data_len = np.load("data/test_data_len.npy").tolist()
+    valid_data_y = np.load("data/test_data_y.npy").tolist()
+    for id in list(data.keys()):
+        data[id]['text'] = [sentence2wordlist(sentence) for sentence in data[id]['text']]
+
     max_sent = max( map(lambda value: max(map(lambda txt_list: len(txt_list), value['text']) ), list(data.values()) ) )
     print("max_sent:", max_sent, ",  max_seq_len:", max(data_len))
+    FLAGS.update({"max_sent_len":max_sent, "max_seq_len":max(data_len)})
     eval_flag = int(len(data_ID) / 4) * 3
     print("{} data loaded".format(len(data)))    
-
 
 
 def sortTempList(temp_list):
@@ -223,20 +275,8 @@ def get_df_batch(start, batch_size, new_data_len=[], cuda=True):
         m_data_len[i] = t_data_len[mts]
         seq = []
         for j in range(t_data_len[mts]):
-            sent = []
-            t_words = transIrregularWord(data[data_ID[mts]]['text'][j]).split(" ")
-            for k in range(len(t_words)):
-                m_word = t_words[k]
-                try:
-                    sent.append( torch.tensor([word2vec[m_word]], dtype=torch.float32) )
-                except KeyError:
-                    miss_vec += 1
-                    sent.append( torch.tensor([word2vec['{'] +word2vec['an'] +  word2vec['unknown'] + word2vec['word'] + word2vec['}'] ], dtype=torch.float32) )
-                except IndexError:
-                    raise
-                else:
-                    hit_vec += 1
-            sent_tensor = torch.cat(sent)
+            sent = wordlist2wordvecs(data[data_ID[mts]]['text'][j])
+            sent_tensor = torch.tensor(np.stack(sent))
             seq.append(sent_tensor)
         data_x.append(seq)
         mts += 1
@@ -245,10 +285,9 @@ def get_df_batch(start, batch_size, new_data_len=[], cuda=True):
             
     return data_x, m_data_len, m_data_y
 
-
 # seq_states is the date_x to get
 # max_id is the next corpus to take
-def get_rl_batch(ids, seq_states, stop_states, counter_id, start_id, total_data):
+def get_rl_batch_0(ids, seq_states, stop_states, counter_id, start_id):
     input_x = np.zeros([FLAGS.batch_size, FLAGS.max_sent_len, FLAGS.embedding_dim], dtype=np.float32)
     input_y = np.zeros([FLAGS.batch_size, FLAGS.class_num], dtype=np.float32)
     miss_vec = 0
@@ -260,54 +299,26 @@ def get_rl_batch(ids, seq_states, stop_states, counter_id, start_id, total_data)
         if stop_states[i] == 1 or seq_states[i] >= data_len[ids[i]]: 
             ids[i] = counter_id + start_id
             seq_states[i] = 0
-            try:
-                t_words = data[ data_ID[ids[i]] ]['text'][seq_states[i]]
-            except:
-                print(ids[i], seq_states[i])
-            for j in range(len(t_words)):
-                m_word = t_words[j]
-                try:
-                    input_x[i][j] = word2vec[m_word]
-                except:
-                    miss_vec = 1
-            # if len(t_words) != 0:
-            #     input_x[i][:len(t_words)] = c2vec.vectorize_words(t_words)
+            word_list = data[ data_ID[ids[i]] ]['text'][seq_states[i]]
+            wordvecs = wordlist2wordvecs(word_list)
+            input_x[i, :len(word_list), :] = np.stack(wordvecs)
             input_y[i] = data_y[ids[i]]
             counter_id += 1
             counter_id = counter_id % total_data
         else:
-            try:
-                t_words = data[ data_ID[ids[i]] ]['text'][seq_states[i]]
-            except:
-                print("ids and seq_states:", ids[i], seq_states[i])
-                t_words = []
-            for j in range(len(t_words)):
-                m_word = t_words[j]
-                try:
-                    input_x[i][j] = word2vec[m_word]
-                except:
-                    miss_vec += 1
-
-            # if len(t_words) != 0:
-            #     input_x[i][:len(t_words)] = c2vec.vectorize_words(t_words)
+            word_list = data[ data_ID[ids[i]] ]['text'][seq_states[i]]
+            wordvecs = wordlist2wordvecs(word_list)
+            input_x[i, :len(word_list), :] = np.stack(wordvecs)
             input_y[i] = data_y[ids[i]]
         # point to the next sequence
         seq_states[i] += 1
 
     return input_x, input_y, ids, seq_states, counter_id
 
+
 def accuracy_on_valid_data(rdm_model = None, sent_pooler = None, rdm_classifier=None, new_data_len=[], cuda=True):
-    def Count_Acc(ylabel, preds):
-        correct_preds = np.array(
-            [1 if y1==y2 else 0 
-            for (y1, y2) in zip(ylabel, preds)]
-        )
-        acc = sum(correct_preds) / (1.0 * len(ylabel))
-        return acc
-    
     batch_size = 20
     t_steps = int(len(valid_data_ID)/batch_size)
-    sum_acc = 0.0
     miss_vec = 0
     mts = 0
     hit_vec = 0
@@ -315,7 +326,8 @@ def accuracy_on_valid_data(rdm_model = None, sent_pooler = None, rdm_classifier=
         t_data_len = new_data_len
     else:
         t_data_len = valid_data_len
-    
+    labels = []
+    preds = []
     for step in range(t_steps):
         data_x = []
         m_data_y = np.zeros([batch_size, 2], dtype=np.int32)
@@ -325,48 +337,34 @@ def accuracy_on_valid_data(rdm_model = None, sent_pooler = None, rdm_classifier=
             m_data_len[i] = t_data_len[mts]
             seq = []
             for j in range(t_data_len[mts]):
-                sent = []
-                t_words = transIrregularWord(data[valid_data_ID[mts]]['text'][j]).split(" ")
-                for k in range(len(t_words)):
-                    m_word = t_words[k]
-                    try:
-                        sent.append( torch.tensor([word2vec[m_word]], dtype=torch.float32))
-                    except KeyError:
-                        miss_vec += 1
-                        sent.append( torch.tensor([word2vec['{'] +word2vec['an'] +  word2vec['unknown'] + word2vec['word'] + word2vec['}'] ], dtype=torch.float32) )
-                    except IndexError:
-                        raise
-                    else:
-                        hit_vec += 1
-                if len(sent) != 0 :
-                    sent_tensor = torch.cat(sent)
-                else:
-                    print("empty sentence:", t_words)
+                sent = wordlist2wordvecs(data[valid_data_ID[mts]]['text'][j])
+                sent_tensor = torch.tensor(np.stack(sent))
                 seq.append(sent_tensor)
             data_x.append(seq)
             mts += 1
-            if mts >= len(data_ID): # read data looply
-                mts = mts % len(data_ID)
-        
+            if mts >= len(valid_data_ID): # read data looply
+                mts = mts % len(valid_data_ID)        
         
         if rdm_model is not None and sent_pooler is not None and rdm_classifier is not None:
             with torch.no_grad():
                 seq = sent_pooler(data_x)
                 rdm_hiddens = rdm_model(seq)
                 batchsize, _, _ = rdm_hiddens.shape
-                rdm_outs = torch.cat(
-                    [ rdm_hiddens[i][m_data_len[i]-1].unsqueeze(0) for i in range(batchsize)] 
-                    # a list of tensor, where the ndim of tensor is 1 and the shape of tensor is [hidden_size]
+                rdm_outs = torch.stack(
+                    [ rdm_hiddens[i][m_data_len[i]-1] for i in range(batchsize)] 
+#                     [ rdm_hiddens[i][0] for i in range(batchsize)] 
                 )
                 rdm_scores = rdm_classifier(
                     rdm_outs
                 )
                 rdm_preds = rdm_scores.argmax(axis=1)
                 y_label = torch.tensor(m_data_y).argmax(axis=1).cuda() if cuda else torch.tensor(m_data_y).argmax(axis=1)
-                acc = Count_Acc(y_label, rdm_preds)
-        sum_acc += acc
-    mean_acc = sum_acc / (1.0*t_steps)
-    return mean_acc
+                preds.append(rdm_preds)
+                labels.append(y_label)
+    
+    pred_array = torch.cat(preds).cpu().numpy()
+    label_array = torch.cat(labels).cpu().numpy()
+    return accuracy_score(y_true=label_array, y_pred=pred_array), precision_score(y_true=label_array, y_pred=pred_array), recall_score(y_true=label_array, y_pred=pred_array)
 
 
 # not to stop -0.1, so that to be early
@@ -415,7 +413,7 @@ def get_reward_0(isStop, ss, pys, ids, seq_ids):
                 raise
             Q_Val[i] = reward[i]
         else:
-            reward[i] = -0.01 
+            reward[i] = -5
             Q_Val[i] = reward[i] + 0.99 * max(ss[i])
     return reward, Q_Val
 
@@ -502,7 +500,6 @@ def get_reward_v1(isStop, mss, ssq, ids, seq_states, cm_model, rdm_hiddens_seq):
 def get_new_len(sent_pooler, rdm_model, cm_model, FLAGS, cuda):
     batch_size = 20
     new_len = []
-    valid_new_len = []
     if len(data_ID) % batch_size == 0: # the total number of events
         flags = int(len(data_ID) / FLAGS.batch_size)
     else:
@@ -542,12 +539,16 @@ def get_new_len(sent_pooler, rdm_model, cm_model, FLAGS, cuda):
                     raise
 
             new_len.extend(tmp_len)
+    print("max_new_len:", max(new_len))
+    print("mean_new_len:", sum(new_len)*1.0/len(new_len))
+    return new_len[:len(data_len)]
 
-    batchsize = 20
+def get_new_len_on_valid_data(sent_pooler, rdm_model, cm_model, FLAGS, cuda):
+    batch_size = 20
     mts = 0
     hit_vec = 0
     miss_vec = 0
-    t_steps = int(len(valid_data_ID)/batchsize)
+    t_steps = int(len(valid_data_ID)/batch_size)
     valid_new_len = []
     for step in range(t_steps):
         data_x = []
@@ -558,23 +559,8 @@ def get_new_len(sent_pooler, rdm_model, cm_model, FLAGS, cuda):
             m_data_len[i] = valid_data_len[mts]
             seq = []
             for j in range(valid_data_len[mts]):
-                sent = []
-                t_words = transIrregularWord(data[valid_data_ID[mts]]['text'][j]).split(" ")
-                for k in range(len(t_words)):
-                    m_word = t_words[k]
-                    try:
-                        sent.append( torch.tensor([word2vec[m_word]], dtype=torch.float32))
-                    except KeyError:
-                        miss_vec += 1
-                        sent.append( torch.tensor([word2vec['{'] +word2vec['an'] +  word2vec['unknown'] + word2vec['word'] + word2vec['}'] ], dtype=torch.float32) )
-                    except IndexError:
-                        raise
-                    else:
-                        hit_vec += 1
-                if len(sent) != 0 :
-                    sent_tensor = torch.cat(sent)
-                else:
-                    print("empty sentence:", t_words)
+                sent = wordlist2wordvecs(data[valid_data_ID[mts]]['text'][j])
+                sent_tensor = torch.tensor(np.stack(sent))
                 seq.append(sent_tensor)
             data_x.append(seq)
             mts += 1
@@ -600,9 +586,7 @@ def get_new_len(sent_pooler, rdm_model, cm_model, FLAGS, cuda):
                 [batchsize, -1, 2]
             )
             isStop = stopScores.argmax(axis=-1).cpu().numpy()
-
             tmp_len = [iS.argmax()+1 if (iS.max() ==1 and (iS.argmax()+1)<m_data_len[iS_idx]) else m_data_len[iS_idx] for iS_idx, iS in enumerate(isStop)]
-
             for t_idx in range(len(tmp_len)):
                 try:
                     assert tmp_len[t_idx] <= m_data_len[t_idx]
@@ -612,11 +596,7 @@ def get_new_len(sent_pooler, rdm_model, cm_model, FLAGS, cuda):
                     print("data_len:", x_len)
                     raise
         valid_new_len.extend(tmp_len)
-
-
-    print("max_new_len:", max(new_len))
-    print("mean_new_len:", sum(new_len)*1.0/len(new_len))
-    return new_len[:len(data_len)], valid_new_len[:len(valid_data_len)]
+    return valid_new_len[:len(valid_data_len)]
 
 def get_RL_Train_batch_V1(D, FLAGS, batch_size, cuda=False):
     m_batch = random.sample(D, batch_size)
@@ -631,3 +611,17 @@ def get_RL_Train_batch_V1(D, FLAGS, batch_size, cuda=False):
         return rdm_state.cuda(), s_ids, s_seqStates
     else:
         return rdm_state, s_ids, s_seqStates
+
+
+def get_RL_Train_batch(D):
+    s_state = torch.zeros([FLAGS.batch_size, FLAGS.hidden_dim], dtype=torch.float32)
+    s_x = np.zeros([FLAGS.batch_size, FLAGS.max_sent_len, FLAGS.embedding_dim], dtype=np.float32)
+    s_isStop = torch.zeros([FLAGS.batch_size, FLAGS.action_num], dtype=torch.float32)
+    s_rw = torch.zeros([FLAGS.batch_size], dtype=torch.float32)
+    m_batch = random.sample(D, FLAGS.batch_size)
+    for i in range(FLAGS.batch_size):
+        s_state[i] = m_batch[i][0]
+        s_x[i] = m_batch[i][1]
+        s_isStop[i][m_batch[i][2]] = 1
+        s_rw[i] = m_batch[i][3]
+    return s_state, s_x, s_isStop, s_rw
